@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ftp-pooler
+  labels:
+    app: ftp-pooler
+spec:
+  serviceName: ftp-pooler-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: ftp-pooler
+  template:
+    metadata:
+      labels:
+        app: ftp-pooler
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: ftp-pooler
+          image: ftp-pooler:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: FTP_POOLER_CONFIG
+              value: /etc/ftp-pooler/config.yaml
+            - name: FTP_POOLER_CONNECTIONS
+              value: /etc/ftp-pooler/connections.ini
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ftp-pooler/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: connections
+              mountPath: /etc/ftp-pooler/connections.ini
+              subPath: connections.ini
+              readOnly: true
+            - name: data
+              mountPath: /data/storage
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: ftp-pooler-config
+        - name: connections
+          secret:
+            secretName: ftp-pooler-connections
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+        # storageClassName: standard  # Uncomment and set your storage class
