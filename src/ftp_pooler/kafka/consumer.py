@@ -86,6 +86,9 @@ class TaskConsumer:
         self._running = False
         self._tasks_received = 0
         self._parse_errors = 0
+        # Lag monitoring
+        self._current_offsets: dict[tuple[str, int], int] = {}  # (topic, partition) -> offset
+        self._lag: dict[tuple[str, int], int] = {}  # (topic, partition) -> lag
 
     @property
     def is_running(self) -> bool:
@@ -101,6 +104,69 @@ class TaskConsumer:
     def parse_errors(self) -> int:
         """Get number of parse errors sent to DLQ."""
         return self._parse_errors
+
+    @property
+    def total_lag(self) -> int:
+        """Get total lag across all partitions."""
+        return sum(self._lag.values())
+
+    @property
+    def lag_by_partition(self) -> dict[str, int]:
+        """Get lag for each partition."""
+        return {
+            f"{topic}-{partition}": lag
+            for (topic, partition), lag in self._lag.items()
+        }
+
+    async def _update_lag(self) -> None:
+        """Update consumer lag metrics."""
+        if self._consumer is None:
+            return
+
+        try:
+            # Get assigned partitions
+            partitions = self._consumer.assignment()
+            if not partitions:
+                return
+
+            # Get end offsets (high watermarks)
+            end_offsets = await self._consumer.end_offsets(partitions)
+
+            # Calculate lag for each partition
+            for tp in partitions:
+                key = (tp.topic, tp.partition)
+                end_offset = end_offsets.get(tp, 0)
+                current_offset = self._current_offsets.get(key, 0)
+                self._lag[key] = max(0, end_offset - current_offset)
+
+        except Exception as e:
+            logger.warning("lag_update_error", error=str(e))
+
+    def _track_offset(self, topic: str, partition: int, offset: int) -> None:
+        """Track the current processed offset.
+
+        Args:
+            topic: Topic name.
+            partition: Partition number.
+            offset: Current offset.
+        """
+        self._current_offsets[(topic, partition)] = offset + 1  # +1 for next expected
+
+    def get_stats(self) -> dict:
+        """Get consumer statistics including lag.
+
+        Returns:
+            Statistics dictionary.
+        """
+        return {
+            "tasks_received": self._tasks_received,
+            "parse_errors": self._parse_errors,
+            "total_lag": self.total_lag,
+            "lag_by_partition": self.lag_by_partition,
+            "input_topic": self._settings.input_topic,
+            "consumer_group": self._settings.consumer_group,
+            "running": self._running,
+        }
 
     async def start(self) -> None:
         """Start the Kafka consumer with retry logic.
@@ -269,12 +335,17 @@ class TaskConsumer:
             raise RuntimeError("Consumer is not started")
 
         retry_count = 0
+        message_count = 0
+        lag_update_interval = 100  # Update lag every N messages
 
         while self._running:
             try:
                 async for message in self._consumer:
                     # Reset retry count on successful message
                     retry_count = 0
+
+                    # Track offset for lag monitoring
+                    self._track_offset(message.topic, message.partition, message.offset)
 
                     task = await self._parse_message(message)
 
@@ -294,6 +365,17 @@ class TaskConsumer:
 
                     # Commit offset after processing
                     await self._consumer.commit()
+
+                    # Periodically update lag metrics
+                    message_count += 1
+                    if message_count % lag_update_interval == 0:
+                        await self._update_lag()
+                        if self.total_lag > 0:
+                            logger.info(
+                                "consumer_lag_status",
+                                total_lag=self.total_lag,
+                                partitions=self.lag_by_partition,
+                            )
 
             except KafkaError as e:
                 retry_count += 1

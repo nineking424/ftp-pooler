@@ -270,10 +270,7 @@ class Application:
             stats["pool"] = self._pool_manager.get_stats()
 
         if self._consumer:
-            stats["consumer"] = {
-                "tasks_received": self._consumer.tasks_received,
-                "parse_errors": self._consumer.parse_errors,
-            }
+            stats["consumer"] = self._consumer.get_stats()
 
         if self._producer:
             stats["producer"] = self._producer.get_stats()
