@@ -17,6 +17,12 @@ class KafkaSettings(BaseModel):
     input_topic: str = Field(default="ftp-tasks")
     result_topic: str = Field(default="ftp-results")
     fail_topic: str = Field(default="ftp-failures")
+    dlq_topic: str = Field(default="ftp-tasks-dlq")
+
+    # Retry settings
+    max_retries: int = Field(default=5, ge=0)
+    base_backoff_ms: int = Field(default=1000, ge=100)
+    max_backoff_ms: int = Field(default=30000, ge=1000)
 
 
 class PoolSettings(BaseModel):
