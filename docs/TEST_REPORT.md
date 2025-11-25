@@ -1,19 +1,21 @@
-# FTP Pooler 테스트 결과 레포트
+# FTP Pooler 종합 테스트 결과 레포트
 
-**테스트 일시**: 2025-11-25
-**테스트 환경**: Kubernetes 클러스터 (kubeadm v1.32.2)
+**테스트 일시**: 2025-11-25 ~ 2025-11-26
+**테스트 환경**: 로컬 (macOS) + Kubernetes 클러스터 (kubeadm v1.32.2)
 **테스트 버전**: v0.2.1
 
 ---
 
 ## 1. 테스트 개요
 
-FTP Pooler는 Kafka 기반의 분산 FTP 파일 전송 시스템입니다. 이 레포트는 Kubernetes 환경에서 수행한 단위 테스트, 통합 테스트, E2E 테스트 결과를 요약합니다.
+FTP Pooler는 Kafka 기반의 분산 FTP 파일 전송 시스템입니다. 이 레포트는 로컬 환경에서의 단위 테스트와 Kubernetes 환경에서의 통합 테스트, E2E 테스트 결과를 종합적으로 요약합니다.
 
 ### 테스트 인프라
 
 | 구성 요소 | 상세 |
 |----------|------|
+| Python | 3.14.0 |
+| pytest | 9.0.1 |
 | Kubernetes | kubeadm v1.32.2 (2노드 클러스터) |
 | Kafka | 3-broker 클러스터 (kafka namespace) |
 | FTP Server | vsftpd (fauria/vsftpd:latest) |
@@ -23,18 +25,172 @@ FTP Pooler는 Kafka 기반의 분산 FTP 파일 전송 시스템입니다. 이 �
 
 ## 2. 테스트 결과 요약
 
-| 테스트 단계 | 상태 | 비고 |
-|------------|------|------|
-| 단위 테스트 (pytest) | ✅ 통과 | 로컬 환경에서 실행 |
-| 통합 테스트 (FTP/Kafka 연결) | ✅ 통과 | 클러스터 내부 연결 확인 |
-| E2E 테스트 (Download) | ✅ 통과 | 파일 다운로드 성공 |
-| E2E 테스트 (Upload) | ⏸️ 미진행 | 다운로드 테스트로 검증 완료 |
+| 테스트 단계 | 테스트 수 | 통과 | 실패 | 상태 |
+|------------|----------|------|------|------|
+| 단위 테스트 (pytest) | 33 | 33 | 0 | ✅ 100% 통과 |
+| 통합 테스트 (FTP/Kafka 연결) | 3 | 3 | 0 | ✅ 통과 |
+| E2E 테스트 (Download) | 1 | 1 | 0 | ✅ 통과 |
+| E2E 테스트 (Upload) | - | - | - | ⏸️ 미진행 |
+| **총계** | **37** | **37** | **0** | **✅ 100%** |
 
 ---
 
-## 3. E2E 테스트 상세 결과
+## 3. 단위 테스트 상세 결과
 
-### 3.1 다운로드 테스트
+### 3.1 테스트 실행 환경
+
+```
+platform darwin -- Python 3.14.0, pytest-9.0.1, pluggy-1.6.0
+rootdir: /Users/nineking/workspace/app/ftp-pooler
+configfile: pytest.ini
+실행 시간: 0.13s
+```
+
+### 3.2 Configuration 모듈 테스트 (test_config.py)
+
+**테스트 파일**: `tests/test_config.py`
+**총 테스트 수**: 16개
+
+#### TestSettings 클래스 (4개 테스트)
+
+| 테스트 명 | 설명 | 결과 |
+|----------|------|------|
+| test_default_settings | 기본 설정값 검증 | ✅ PASSED |
+| test_kafka_settings | Kafka 설정 생성 검증 | ✅ PASSED |
+| test_pool_settings_validation | Pool 설정 유효성 검증 | ✅ PASSED |
+| test_settings_from_yaml | YAML 파일 로딩 검증 | ✅ PASSED |
+
+#### TestConnectionConfig 클래스 (4개 테스트)
+
+| 테스트 명 | 설명 | 결과 |
+|----------|------|------|
+| test_ftp_connection_config | FTP 연결 설정 생성 | ✅ PASSED |
+| test_ftp_connection_requires_host | 호스트 필수 검증 | ✅ PASSED |
+| test_local_connection_config | 로컬 연결 설정 생성 | ✅ PASSED |
+| test_local_connection_requires_absolute_path | 절대 경로 필수 검증 | ✅ PASSED |
+
+#### TestConnectionRegistry 클래스 (6개 테스트)
+
+| 테스트 명 | 설명 | 결과 |
+|----------|------|------|
+| test_register_and_get | 연결 등록 및 조회 | ✅ PASSED |
+| test_get_ftp | FTP 연결 조회 | ✅ PASSED |
+| test_get_local | 로컬 연결 조회 | ✅ PASSED |
+| test_duplicate_registration_raises | 중복 등록 에러 검증 | ✅ PASSED |
+| test_get_nonexistent_raises | 미존재 연결 에러 검증 | ✅ PASSED |
+| test_list_connections | 연결 목록 조회 | ✅ PASSED |
+
+#### TestLoadConnections 클래스 (2개 테스트)
+
+| 테스트 명 | 설명 | 결과 |
+|----------|------|------|
+| test_load_connections_from_ini | INI 파일 로딩 | ✅ PASSED |
+| test_load_nonexistent_file_raises | 미존재 파일 에러 검증 | ✅ PASSED |
+
+---
+
+### 3.3 Session Pool 모듈 테스트 (test_pool.py)
+
+**테스트 파일**: `tests/test_pool.py`
+**총 테스트 수**: 7개
+
+#### TestFTPSession 클래스 (2개 테스트)
+
+| 테스트 명 | 설명 | 결과 |
+|----------|------|------|
+| test_session_initial_state | 세션 초기 상태 검증 | ✅ PASSED |
+| test_session_to_dict | 세션 직렬화 검증 | ✅ PASSED |
+
+#### TestSessionPool 클래스 (2개 테스트)
+
+| 테스트 명 | 설명 | 결과 |
+|----------|------|------|
+| test_pool_initial_state | 풀 초기 상태 검증 | ✅ PASSED |
+| test_pool_get_stats | 풀 통계 조회 검증 | ✅ PASSED |
+
+#### TestSessionPoolManager 클래스 (2개 테스트)
+
+| 테스트 명 | 설명 | 결과 |
+|----------|------|------|
+| test_manager_initial_state | 매니저 초기 상태 검증 | ✅ PASSED |
+| test_manager_get_stats | 매니저 통계 조회 검증 | ✅ PASSED |
+
+#### TestSessionState 클래스 (1개 테스트)
+
+| 테스트 명 | 설명 | 결과 |
+|----------|------|------|
+| test_session_state_values | 세션 상태 Enum 값 검증 | ✅ PASSED |
+
+---
+
+### 3.4 Transfer 모듈 테스트 (test_transfer.py)
+
+**테스트 파일**: `tests/test_transfer.py`
+**총 테스트 수**: 10개
+
+#### TestTransferTask 클래스 (4개 테스트)
+
+| 테스트 명 | 설명 | 결과 |
+|----------|------|------|
+| test_create_from_dict | 딕셔너리에서 태스크 생성 | ✅ PASSED |
+| test_create_from_dict_generates_id | task_id 자동 생성 검증 | ✅ PASSED |
+| test_create_from_dict_missing_field_raises | 필수 필드 누락 에러 검증 | ✅ PASSED |
+| test_to_dict | 태스크 직렬화 검증 | ✅ PASSED |
+
+#### TestTransferResult 클래스 (4개 테스트)
+
+| 테스트 명 | 설명 | 결과 |
+|----------|------|------|
+| test_success_result | 성공 결과 생성 | ✅ PASSED |
+| test_failure_result | 실패 결과 생성 | ✅ PASSED |
+| test_to_dict_success | 성공 결과 직렬화 | ✅ PASSED |
+| test_to_dict_failure | 실패 결과 직렬화 | ✅ PASSED |
+
+#### TestTransferEnums 클래스 (2개 테스트)
+
+| 테스트 명 | 설명 | 결과 |
+|----------|------|------|
+| test_transfer_status_values | TransferStatus Enum 값 검증 | ✅ PASSED |
+| test_transfer_direction_values | TransferDirection Enum 값 검증 | ✅ PASSED |
+
+---
+
+## 4. 통합 테스트 상세 결과
+
+### 4.1 Kafka 연결 테스트
+
+**테스트 환경**: Kubernetes 클러스터 내부
+
+| 항목 | 결과 |
+|------|------|
+| Kafka 브로커 연결 | ✅ 성공 |
+| ftp-tasks 토픽 Consume | ✅ 성공 |
+| ftp-results 토픽 Produce | ✅ 성공 |
+| ftp-failures 토픽 Produce | ✅ 성공 |
+
+### 4.2 FTP 연결 테스트
+
+**테스트 환경**: Kubernetes Pod → FTP LoadBalancer Service
+
+| 항목 | 결과 |
+|------|------|
+| FTP 컨트롤 연결 (포트 21) | ✅ 성공 |
+| FTP 패시브 모드 연결 | ✅ 성공 |
+| 파일 목록 조회 | ✅ 성공 |
+
+### 4.3 Health Check 테스트
+
+| 엔드포인트 | 결과 |
+|-----------|------|
+| GET /live | ✅ 200 OK |
+| GET /ready | ✅ 200 OK |
+| GET /health | ✅ 200 OK |
+
+---
+
+## 5. E2E 테스트 상세 결과
+
+### 5.1 다운로드 테스트
 
 **테스트 케이스**: FTP 서버에서 로컬 스토리지로 파일 다운로드
 
@@ -72,9 +228,9 @@ FTP Pooler는 Kafka 기반의 분산 FTP 파일 전송 시스템입니다. 이 �
 
 ---
 
-## 4. 테스트 중 발견된 이슈 및 수정 사항
+## 6. 테스트 중 발견된 이슈 및 수정 사항
 
-### 4.1 Docker 이미지 아키텍처 불일치
+### 6.1 Docker 이미지 아키텍처 불일치
 
 **문제**: ARM64 이미지를 AMD64 클러스터에 배포하여 `exec format error` 발생
 
@@ -84,7 +240,7 @@ FTP Pooler는 Kafka 기반의 분산 FTP 파일 전송 시스템입니다. 이 �
 
 ---
 
-### 4.2 소스 파일 권한 오류
+### 6.2 소스 파일 권한 오류
 
 **문제**: 컨테이너 내 non-root 사용자가 소스 파일 읽기 불가
 
@@ -101,7 +257,7 @@ COPY --chown=appuser:appgroup src/ ./src/
 
 ---
 
-### 4.3 Kafka bootstrap_servers 형식 오류
+### 6.3 Kafka bootstrap_servers 형식 오류
 
 **문제**: Pydantic validation 오류 - 문자열 대신 리스트 필요
 
@@ -121,7 +277,7 @@ bootstrap_servers:
 
 ---
 
-### 4.4 API 서버 미시작
+### 6.4 API 서버 미시작
 
 **문제**: Health check 실패 - uvicorn 서버가 시작되지 않음
 
@@ -153,7 +309,7 @@ async def run_forever(self) -> None:
 
 ---
 
-### 4.5 FTP 패시브 모드 연결 실패
+### 6.5 FTP 패시브 모드 연결 실패
 
 **문제**: FTP 컨트롤 연결은 성공하나 데이터 연결(패시브 모드) 타임아웃
 
@@ -176,7 +332,7 @@ spec:
 
 ---
 
-### 4.6 Kafka Consumer 빈 메시지 처리 오류
+### 6.6 Kafka Consumer 빈 메시지 처리 오류
 
 **문제**: 빈 Kafka 메시지 역직렬화 시 `JSONDecodeError` 발생으로 Consumer 크래시
 
@@ -196,7 +352,7 @@ def _safe_json_deserialize(data: bytes) -> Optional[dict]:
 
 ---
 
-### 4.7 Settings 환경 변수 미로드
+### 6.7 Settings 환경 변수 미로드
 
 **문제**: YAML 설정 로드 시 `FTP_POOLER_CONNECTIONS` 환경 변수가 무시됨
 
@@ -217,7 +373,31 @@ def from_yaml(cls, config_path: str | Path) -> "Settings":
 
 ---
 
-## 5. Git 커밋 이력
+## 7. 코드 커버리지
+
+### 7.1 테스트 대상 모듈
+
+| 모듈 | 테스트 파일 | 주요 테스트 항목 |
+|------|------------|-----------------|
+| `ftp_pooler.config.settings` | test_config.py | Settings, KafkaSettings, PoolSettings |
+| `ftp_pooler.config.connections` | test_config.py | ConnectionRegistry, load_connections |
+| `ftp_pooler.pool.session` | test_pool.py | FTPSession, SessionState |
+| `ftp_pooler.pool.manager` | test_pool.py | SessionPool, SessionPoolManager |
+| `ftp_pooler.transfer.models` | test_transfer.py | TransferTask, TransferResult |
+
+### 7.2 미테스트 모듈 (통합/E2E로 검증)
+
+| 모듈 | 검증 방법 |
+|------|----------|
+| `ftp_pooler.kafka.consumer` | E2E 테스트로 검증 |
+| `ftp_pooler.kafka.producer` | E2E 테스트로 검증 |
+| `ftp_pooler.transfer.engine` | E2E 테스트로 검증 |
+| `ftp_pooler.api.app` | 통합 테스트로 검증 |
+| `ftp_pooler.main` | E2E 테스트로 검증 |
+
+---
+
+## 8. Git 커밋 이력
 
 테스트 과정에서 생성된 커밋:
 
@@ -229,7 +409,7 @@ def from_yaml(cls, config_path: str | Path) -> "Settings":
 
 ---
 
-## 6. 배포된 리소스
+## 9. 배포된 리소스
 
 ### Kubernetes 리소스 (ftp-pooler namespace)
 
@@ -257,21 +437,32 @@ def from_yaml(cls, config_path: str | Path) -> "Settings":
 
 ---
 
-## 7. 성능 지표
+## 10. 성능 지표
 
 | 지표 | 값 |
 |------|-----|
+| 단위 테스트 실행 시간 | 0.13s |
 | 평균 다운로드 처리 시간 | 148ms |
 | 전송 바이트 | 20 bytes |
 | Consumer 그룹 Lag | 0 |
 
 ---
 
-## 8. 결론 및 권장 사항
+## 11. 결론 및 권장 사항
 
 ### 테스트 결론
 
-FTP Pooler v0.2.1은 Kubernetes 환경에서 정상적으로 동작하며, Kafka를 통한 비동기 파일 전송 태스크 처리가 성공적으로 검증되었습니다.
+FTP Pooler v0.2.1은 모든 단위 테스트(33개)를 통과하였으며, Kubernetes 환경에서의 통합 테스트 및 E2E 테스트도 성공적으로 완료되었습니다. Kafka를 통한 비동기 파일 전송 태스크 처리가 정상적으로 동작함을 확인하였습니다.
+
+### 테스트 성공 기준 충족
+
+| 기준 | 충족 여부 |
+|------|----------|
+| 모든 단위 테스트 통과 | ✅ 33/33 (100%) |
+| FTP 연결 안정성 | ✅ 패시브 모드 정상 동작 |
+| Kafka 메시지 처리 | ✅ 정상 동작 |
+| Health Check 응답 | ✅ 200 OK |
+| 파일 전송 정확성 | ✅ 내용 일치 확인 |
 
 ### 권장 사항
 
@@ -285,10 +476,12 @@ FTP Pooler v0.2.1은 Kubernetes 환경에서 정상적으로 동작하며, Kafka
 
 5. **업로드 테스트**: 로컬 → FTP 업로드 시나리오 검증 권장.
 
+6. **Pydantic 경고 수정**: `Field(env=...)` deprecated 경고 해결 필요 (Pydantic V3 대비).
+
 ---
 
-## 9. 테스트 담당자
+## 12. 테스트 담당자
 
 - **작성자**: Claude (AI Assistant)
 - **테스트 환경 제공**: nineking424
-- **테스트 일자**: 2025-11-25
+- **테스트 일자**: 2025-11-25 ~ 2025-11-26
