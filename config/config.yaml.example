@@ -1,0 +1,24 @@
+kafka:
+  bootstrap_servers:
+    - kafka-0:9092
+    - kafka-1:9092
+  consumer_group: ftp-pooler
+  input_topic: ftp-tasks
+  result_topic: ftp-results
+  fail_topic: ftp-failures
+
+pool:
+  max_sessions_per_pod: 100
+  max_sessions_per_connection: 10
+  session_timeout_seconds: 300
+
+api:
+  host: 0.0.0.0
+  port: 8080
+
+metrics:
+  port: 9090
+
+logging:
+  level: INFO
+  format: json

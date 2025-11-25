@@ -1,0 +1,19 @@
+[remote-server-a]
+type = ftp
+host = ftp.example.com
+port = 21
+user = username
+pass = password
+passive = true
+
+[remote-server-b]
+type = ftp
+host = ftp2.example.com
+port = 21
+user = admin
+pass = secret
+passive = true
+
+[local]
+type = local
+base_path = /mnt/storage

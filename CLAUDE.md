@@ -74,6 +74,35 @@ pytest
 python -m ftp_pooler.main
 ```
 
+## Git 워크플로우
+
+각 구현 단계가 완료될 때마다 반드시 다음을 수행합니다:
+
+1. 변경사항 확인: `git status`
+2. 스테이징: `git add .`
+3. 커밋: 단계별 의미 있는 커밋 메시지 작성
+4. 푸시: `git push origin main`
+
+### 커밋 메시지 형식
+
+```
+<type>: <description>
+
+<body>
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+**Type 종류:**
+- `feat`: 새로운 기능
+- `fix`: 버그 수정
+- `docs`: 문서 변경
+- `refactor`: 코드 리팩토링
+- `test`: 테스트 추가/수정
+- `chore`: 빌드, 설정 등 기타 변경
+
 ## 참고 문서
 
 - 상세 계획서: `.claude/plans/golden-snuggling-nebula.md`
