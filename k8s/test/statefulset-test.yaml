@@ -24,7 +24,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: ftp-pooler
-          image: nineking424/ftp-pooler:latest
+          image: nineking424/ftp-pooler:v0.2.1
           imagePullPolicy: Always
           ports:
             - name: http

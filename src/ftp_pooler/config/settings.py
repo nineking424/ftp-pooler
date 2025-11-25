@@ -74,12 +74,19 @@ class Settings(BaseSettings):
         Returns:
             Settings instance loaded from the file.
         """
+        import os
+
         config_path = Path(config_path)
         if not config_path.exists():
             raise FileNotFoundError(f"Config file not found: {config_path}")
 
         with open(config_path, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f) or {}
+
+        # Also check environment variables for paths
+        connections_path = os.getenv("FTP_POOLER_CONNECTIONS")
+        if connections_path:
+            config_data["connections_path"] = connections_path
 
         return cls(**config_data, config_path=str(config_path))
 

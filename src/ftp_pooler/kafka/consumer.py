@@ -15,6 +15,23 @@ from ftp_pooler.transfer.models import TransferTask
 logger = structlog.get_logger(__name__)
 
 
+def _safe_json_deserialize(data: bytes) -> Optional[dict]:
+    """Safely deserialize JSON data.
+
+    Args:
+        data: Raw bytes from Kafka message.
+
+    Returns:
+        Parsed JSON dict or None if parsing fails.
+    """
+    if not data:
+        return None
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
 # Type alias for task handler
 TaskHandler = Callable[[TransferTask], Awaitable[None]]
 
@@ -64,7 +81,7 @@ class TaskConsumer:
             group_id=self._settings.consumer_group,
             enable_auto_commit=False,
             auto_offset_reset="earliest",
-            value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+            value_deserializer=_safe_json_deserialize,
         )
 
         await self._consumer.start()
@@ -98,13 +115,21 @@ class TaskConsumer:
         """
         try:
             data = message.value
+            if data is None:
+                logger.warning(
+                    "empty_message_skipped",
+                    offset=message.offset,
+                    partition=message.partition,
+                )
+                return None
+
             if isinstance(data, str):
                 data = json.loads(data)
 
             task = TransferTask.from_dict(data)
             return task
 
-        except (json.JSONDecodeError, ValueError, KeyError) as e:
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError) as e:
             logger.error(
                 "message_parse_error",
                 error=str(e),
