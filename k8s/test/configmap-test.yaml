@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ftp-pooler-config
+  namespace: ftp-pooler
+data:
+  config.yaml: |
+    kafka:
+      bootstrap_servers:
+        - "kafka-broker-0.kafka-broker.kafka:9092"
+        - "kafka-broker-1.kafka-broker.kafka:9092"
+        - "kafka-broker-2.kafka-broker.kafka:9092"
+      consumer_group: "ftp-pooler-test"
+      input_topic: "ftp-tasks"
+      result_topic: "ftp-results"
+      fail_topic: "ftp-failures"
+
+    pool:
+      max_sessions_per_pod: 50
+      max_sessions_per_connection: 10
+      session_timeout_seconds: 300
+
+    api:
+      host: "0.0.0.0"
+      port: 8080
+
+    metrics:
+      port: 9090
+
+    logging:
+      level: "DEBUG"
+      format: "json"
+
+  connections.ini: |
+    [remote-ftp]
+    type = ftp
+    host = ftp-server.ftp-pooler.svc.cluster.local
+    port = 21
+    user = ftpuser
+    pass = ftppass
+
+    [local]
+    type = local
+    base_path = /data/storage

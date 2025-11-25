@@ -1,0 +1,123 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ftp-data-pvc
+  namespace: ftp-pooler
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ftp-server-config
+  namespace: ftp-pooler
+data:
+  vsftpd.conf: |
+    listen=YES
+    listen_ipv6=NO
+    anonymous_enable=NO
+    local_enable=YES
+    write_enable=YES
+    local_umask=022
+    dirmessage_enable=YES
+    use_localtime=YES
+    xferlog_enable=YES
+    connect_from_port_20=YES
+    chroot_local_user=YES
+    allow_writeable_chroot=YES
+    secure_chroot_dir=/var/run/vsftpd/empty
+    pam_service_name=vsftpd
+    pasv_enable=YES
+    pasv_min_port=30000
+    pasv_max_port=30100
+    pasv_address=ftp-server.ftp-pooler.svc.cluster.local
+    pasv_addr_resolve=YES
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ftp-server
+  namespace: ftp-pooler
+  labels:
+    app: ftp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ftp-server
+  template:
+    metadata:
+      labels:
+        app: ftp-server
+    spec:
+      containers:
+        - name: vsftpd
+          image: fauria/vsftpd:latest
+          ports:
+            - containerPort: 21
+              name: ftp
+            - containerPort: 20
+              name: ftp-data
+          env:
+            - name: FTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ftp-credentials
+                  key: username
+            - name: FTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: ftp-credentials
+                  key: password
+            - name: PASV_ADDRESS
+              value: "ftp-server.ftp-pooler.svc.cluster.local"
+            - name: PASV_MIN_PORT
+              value: "30000"
+            - name: PASV_MAX_PORT
+              value: "30100"
+          volumeMounts:
+            - name: ftp-data
+              mountPath: /home/vsftpd
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+      volumes:
+        - name: ftp-data
+          persistentVolumeClaim:
+            claimName: ftp-data-pvc
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ftp-credentials
+  namespace: ftp-pooler
+type: Opaque
+stringData:
+  username: ftpuser
+  password: ftppass
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ftp-server
+  namespace: ftp-pooler
+spec:
+  selector:
+    app: ftp-server
+  ports:
+    - name: ftp
+      port: 21
+      targetPort: 21
+    - name: ftp-data
+      port: 20
+      targetPort: 20
+  type: ClusterIP

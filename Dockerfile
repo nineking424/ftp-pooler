@@ -32,8 +32,8 @@ RUN groupadd --gid 1000 appgroup && \
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy application code
-COPY src/ ./src/
+# Copy application code and set ownership
+COPY --chown=appuser:appgroup src/ ./src/
 
 # Set Python path
 ENV PYTHONPATH="/app/src"

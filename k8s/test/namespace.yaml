@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ftp-pooler
+  labels:
+    app.kubernetes.io/name: ftp-pooler
+    app.kubernetes.io/component: test

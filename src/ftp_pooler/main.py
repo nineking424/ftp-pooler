@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Optional
 
 import structlog
+import uvicorn
 
+from ftp_pooler.api.routes import create_app
 from ftp_pooler.config.connections import ConnectionRegistry, load_connections
 from ftp_pooler.config.settings import Settings, get_settings
 from ftp_pooler.kafka.consumer import TaskConsumer
@@ -197,14 +199,39 @@ class Application:
 
         logger.info("application_stopped")
 
+    async def _run_api_server(self) -> None:
+        """Run the FastAPI server."""
+        fastapi_app = create_app(self)
+        config = uvicorn.Config(
+            fastapi_app,
+            host=self._settings.api.host,
+            port=self._settings.api.port,
+            log_level="warning",
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+
     async def run_forever(self) -> None:
         """Run the application until shutdown signal."""
         await self.initialize()
         await self.start()
 
+        # Start API server as background task
+        api_task = asyncio.create_task(self._run_api_server())
+        logger.info(
+            "api_server_started",
+            host=self._settings.api.host,
+            port=self._settings.api.port,
+        )
+
         try:
             await self.run()
         finally:
+            api_task.cancel()
+            try:
+                await api_task
+            except asyncio.CancelledError:
+                pass
             await self.stop()
 
     def get_stats(self) -> dict:
