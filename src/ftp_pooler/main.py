@@ -118,10 +118,11 @@ class Application:
             self._connection_registry = ConnectionRegistry()
             logger.warning("no_connections_path_configured")
 
-        # Initialize pool manager
+        # Initialize pool manager with circuit breaker
         self._pool_manager = SessionPoolManager(
             connection_registry=self._connection_registry,
             settings=self._settings.pool,
+            circuit_breaker_settings=self._settings.circuit_breaker,
         )
 
         # Initialize Kafka producer

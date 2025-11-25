@@ -40,6 +40,15 @@ class TransferSettings(BaseModel):
     connect_timeout_seconds: int = Field(default=30, ge=1)
 
 
+class CircuitBreakerSettings(BaseModel):
+    """Circuit breaker configuration."""
+
+    failure_threshold: int = Field(default=5, ge=1)
+    success_threshold: int = Field(default=3, ge=1)
+    timeout_seconds: int = Field(default=60, ge=1)
+    half_open_max_calls: int = Field(default=3, ge=1)
+
+
 class ApiSettings(BaseModel):
     """REST API configuration."""
 
@@ -66,6 +75,7 @@ class Settings(BaseSettings):
     kafka: KafkaSettings = Field(default_factory=KafkaSettings)
     pool: PoolSettings = Field(default_factory=PoolSettings)
     transfer: TransferSettings = Field(default_factory=TransferSettings)
+    circuit_breaker: CircuitBreakerSettings = Field(default_factory=CircuitBreakerSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
     metrics: MetricsSettings = Field(default_factory=MetricsSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)

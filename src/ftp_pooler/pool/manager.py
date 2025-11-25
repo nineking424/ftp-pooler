@@ -5,13 +5,16 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Optional
 
+from ftp_pooler.pool.circuit_breaker import CircuitBreakerOpenError, CircuitBreakerRegistry
+
 import structlog
 
 from ftp_pooler.config.connections import (
     ConnectionRegistry,
     FTPConnectionConfig,
 )
-from ftp_pooler.config.settings import PoolSettings
+from ftp_pooler.config.settings import CircuitBreakerSettings, PoolSettings
+from ftp_pooler.pool.circuit_breaker import CircuitBreakerRegistry
 from ftp_pooler.pool.session import FTPSession, SessionState
 
 
@@ -204,18 +207,24 @@ class SessionPoolManager:
         self,
         connection_registry: ConnectionRegistry,
         settings: PoolSettings,
+        circuit_breaker_settings: Optional[CircuitBreakerSettings] = None,
     ) -> None:
         """Initialize the session pool manager.
 
         Args:
             connection_registry: Registry of connection configurations.
             settings: Pool settings.
+            circuit_breaker_settings: Optional circuit breaker settings.
         """
         self._registry = connection_registry
         self._settings = settings
         self._pools: dict[str, SessionPool] = {}
         self._total_semaphore = asyncio.Semaphore(settings.max_sessions_per_pod)
         self._lock = asyncio.Lock()
+
+        # Initialize circuit breaker registry
+        cb_settings = circuit_breaker_settings or CircuitBreakerSettings()
+        self._circuit_breakers = CircuitBreakerRegistry(cb_settings)
 
     @property
     def total_sessions(self) -> int:
@@ -270,13 +279,40 @@ class SessionPoolManager:
         Raises:
             KeyError: If connection is not found.
             ConnectionError: If session acquisition fails.
+            CircuitBreakerOpenError: If circuit breaker is open.
         """
+        # Check circuit breaker first
+        circuit_breaker = self._circuit_breakers.get(connection_id)
+        if not circuit_breaker.can_execute():
+            logger.warning(
+                "circuit_breaker_open",
+                connection_id=connection_id,
+                state=circuit_breaker.state.value,
+                failure_count=circuit_breaker.failure_count,
+            )
+            raise CircuitBreakerOpenError(
+                f"Circuit breaker is open for connection: {connection_id}"
+            )
+
         # Acquire global semaphore first
         await self._total_semaphore.acquire()
         try:
             pool = await self._get_or_create_pool(connection_id)
             async with pool.acquire() as session:
+                # Record success on successful acquisition
+                circuit_breaker.record_success()
                 yield session
+        except Exception as e:
+            # Record failure on any exception
+            circuit_breaker.record_failure()
+            logger.warning(
+                "circuit_breaker_failure_recorded",
+                connection_id=connection_id,
+                error=str(e),
+                failure_count=circuit_breaker.failure_count,
+                state=circuit_breaker.state.value,
+            )
+            raise
         finally:
             self._total_semaphore.release()
 
@@ -317,4 +353,5 @@ class SessionPoolManager:
             "total_sessions": self.total_sessions,
             "active_sessions": self.active_sessions,
             "pools": pool_stats,
+            "circuit_breakers": self._circuit_breakers.get_all_stats(),
         }
