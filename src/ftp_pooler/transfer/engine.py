@@ -63,6 +63,7 @@ class TransferEngine:
         self._tasks_in_progress = 0
         self._lock = asyncio.Lock()
         self._timeouts = 0
+        self._callback_errors = 0
 
     @property
     def tasks_in_progress(self) -> int:
@@ -73,6 +74,39 @@ class TransferEngine:
     def timeouts(self) -> int:
         """Get number of transfers that timed out."""
         return self._timeouts
+
+    @property
+    def callback_errors(self) -> int:
+        """Get number of callback errors."""
+        return self._callback_errors
+
+    async def _safe_callback(
+        self,
+        callback: Optional[ResultCallback],
+        result: TransferResult,
+        callback_name: str,
+    ) -> None:
+        """Safely execute a callback, catching and logging any exceptions.
+
+        Args:
+            callback: The callback to execute (may be None).
+            result: The transfer result to pass to the callback.
+            callback_name: Name of the callback for logging.
+        """
+        if callback is None:
+            return
+
+        try:
+            await callback(result)
+        except Exception as e:
+            self._callback_errors += 1
+            logger.error(
+                "callback_error",
+                callback=callback_name,
+                task_id=result.task_id,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
 
     def _determine_direction(self, task: TransferTask) -> TransferDirection:
         """Determine the transfer direction.
@@ -251,9 +285,8 @@ class TransferEngine:
                 duration_ms=duration_ms,
             )
 
-            # Call success callback
-            if self._on_success:
-                await self._on_success(result)
+            # Call success callback (safely)
+            await self._safe_callback(self._on_success, result, "on_success")
 
             return result
 
@@ -333,9 +366,8 @@ class TransferEngine:
             async with self._lock:
                 self._tasks_in_progress -= 1
 
-        # Call failure callback
-        if self._on_failure:
-            await self._on_failure(result)
+        # Call failure callback (safely)
+        await self._safe_callback(self._on_failure, result, "on_failure")
 
         return result
 

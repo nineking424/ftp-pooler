@@ -285,6 +285,7 @@ class Application:
             stats["transfer"] = {
                 "tasks_in_progress": self._transfer_engine.tasks_in_progress,
                 "timeouts": self._transfer_engine.timeouts,
+                "callback_errors": self._transfer_engine.callback_errors,
             }
 
         return stats
