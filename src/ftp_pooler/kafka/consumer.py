@@ -10,6 +10,7 @@ from aiokafka import AIOKafkaConsumer
 from aiokafka.errors import KafkaError
 
 from ftp_pooler.config.settings import KafkaSettings
+from ftp_pooler.kafka.dlq import DLQProducer
 from ftp_pooler.transfer.models import TransferTask
 
 
@@ -69,18 +70,22 @@ class TaskConsumer:
         self,
         settings: KafkaSettings,
         task_handler: Optional[TaskHandler] = None,
+        dlq_producer: Optional[DLQProducer] = None,
     ) -> None:
         """Initialize the task consumer.
 
         Args:
             settings: Kafka settings.
             task_handler: Optional handler for incoming tasks.
+            dlq_producer: Optional DLQ producer for failed messages.
         """
         self._settings = settings
         self._task_handler = task_handler
+        self._dlq_producer = dlq_producer
         self._consumer: Optional[AIOKafkaConsumer] = None
         self._running = False
         self._tasks_received = 0
+        self._parse_errors = 0
 
     @property
     def is_running(self) -> bool:
@@ -91,6 +96,11 @@ class TaskConsumer:
     def tasks_received(self) -> int:
         """Get number of tasks received."""
         return self._tasks_received
+
+    @property
+    def parse_errors(self) -> int:
+        """Get number of parse errors sent to DLQ."""
+        return self._parse_errors
 
     async def start(self) -> None:
         """Start the Kafka consumer with retry logic.
@@ -210,6 +220,12 @@ class TaskConsumer:
                     offset=message.offset,
                     partition=message.partition,
                 )
+                # Send empty message to DLQ
+                if self._dlq_producer:
+                    await self._dlq_producer.send_parse_error(
+                        message, ValueError("Empty message value")
+                    )
+                    self._parse_errors += 1
                 return None
 
             if isinstance(data, str):
@@ -225,6 +241,18 @@ class TaskConsumer:
                 offset=message.offset,
                 partition=message.partition,
             )
+            # Send failed message to DLQ
+            if self._dlq_producer:
+                try:
+                    await self._dlq_producer.send_parse_error(message, e)
+                    self._parse_errors += 1
+                except Exception as dlq_error:
+                    logger.error(
+                        "dlq_send_failed",
+                        error=str(dlq_error),
+                        original_error=str(e),
+                        offset=message.offset,
+                    )
             return None
 
     async def consume(self) -> AsyncIterator[TransferTask]:

@@ -13,6 +13,7 @@ from ftp_pooler.api.routes import create_app
 from ftp_pooler.config.connections import ConnectionRegistry, load_connections
 from ftp_pooler.config.settings import Settings, get_settings
 from ftp_pooler.kafka.consumer import TaskConsumer
+from ftp_pooler.kafka.dlq import DLQProducer
 from ftp_pooler.kafka.producer import ResultProducer
 from ftp_pooler.logging import setup_logging
 from ftp_pooler.pool.manager import SessionPoolManager
@@ -38,6 +39,7 @@ class Application:
         self._transfer_engine: Optional[TransferEngine] = None
         self._consumer: Optional[TaskConsumer] = None
         self._producer: Optional[ResultProducer] = None
+        self._dlq_producer: Optional[DLQProducer] = None
         self._running = False
         self._shutdown_event = asyncio.Event()
 
@@ -126,6 +128,10 @@ class Application:
         self._producer = ResultProducer(self._settings.kafka)
         await self._producer.start()
 
+        # Initialize DLQ producer
+        self._dlq_producer = DLQProducer(self._settings.kafka)
+        await self._dlq_producer.start()
+
         # Initialize transfer engine
         self._transfer_engine = TransferEngine(
             connection_registry=self._connection_registry,
@@ -134,10 +140,11 @@ class Application:
             on_failure=self._on_transfer_failure,
         )
 
-        # Initialize Kafka consumer
+        # Initialize Kafka consumer with DLQ
         self._consumer = TaskConsumer(
             settings=self._settings.kafka,
             task_handler=self._process_task,
+            dlq_producer=self._dlq_producer,
         )
 
         logger.info("application_initialized")
@@ -197,6 +204,10 @@ class Application:
         if self._producer:
             await self._producer.stop()
 
+        # Stop DLQ producer
+        if self._dlq_producer:
+            await self._dlq_producer.stop()
+
         logger.info("application_stopped")
 
     async def _run_api_server(self) -> None:
@@ -250,10 +261,14 @@ class Application:
         if self._consumer:
             stats["consumer"] = {
                 "tasks_received": self._consumer.tasks_received,
+                "parse_errors": self._consumer.parse_errors,
             }
 
         if self._producer:
             stats["producer"] = self._producer.get_stats()
+
+        if self._dlq_producer:
+            stats["dlq"] = self._dlq_producer.get_stats()
 
         if self._transfer_engine:
             stats["transfer"] = {
