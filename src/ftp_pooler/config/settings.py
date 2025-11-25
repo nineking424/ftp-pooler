@@ -31,6 +31,10 @@ class PoolSettings(BaseModel):
     max_sessions_per_pod: int = Field(default=100, ge=1)
     max_sessions_per_connection: int = Field(default=10, ge=1)
     session_timeout_seconds: int = Field(default=300, ge=1)
+    # Pre-warming configuration
+    prewarm_enabled: bool = Field(default=True)
+    prewarm_sessions_per_connection: int = Field(default=2, ge=0)
+    prewarm_timeout_seconds: int = Field(default=30, ge=1)
 
 
 class TransferSettings(BaseModel):

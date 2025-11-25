@@ -185,6 +185,79 @@ class SessionPool:
             "available": self.available_sessions,
         }
 
+    async def warm_up(self, num_sessions: int, timeout: float = 30.0) -> dict:
+        """Pre-warm the pool by creating sessions in advance.
+
+        Args:
+            num_sessions: Number of sessions to pre-create.
+            timeout: Timeout for the warm-up operation.
+
+        Returns:
+            Warm-up result with success/failure counts.
+        """
+        num_sessions = min(num_sessions, self.max_sessions)
+        sessions_needed = num_sessions - self.total_sessions
+
+        if sessions_needed <= 0:
+            return {
+                "connection_id": self.connection_id,
+                "requested": num_sessions,
+                "created": 0,
+                "failed": 0,
+                "total_sessions": self.total_sessions,
+            }
+
+        created = 0
+        failed = 0
+
+        async def create_session_safe() -> bool:
+            try:
+                await self._create_session()
+                return True
+            except Exception as e:
+                logger.warning(
+                    "prewarm_session_failed",
+                    connection_id=self.connection_id,
+                    error=str(e),
+                )
+                return False
+
+        try:
+            async with asyncio.timeout(timeout):
+                tasks = [create_session_safe() for _ in range(sessions_needed)]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for result in results:
+                    if result is True:
+                        created += 1
+                    else:
+                        failed += 1
+
+        except asyncio.TimeoutError:
+            logger.warning(
+                "prewarm_timeout",
+                connection_id=self.connection_id,
+                timeout=timeout,
+                created=created,
+            )
+
+        logger.info(
+            "pool_prewarmed",
+            connection_id=self.connection_id,
+            requested=num_sessions,
+            created=created,
+            failed=failed,
+            total_sessions=self.total_sessions,
+        )
+
+        return {
+            "connection_id": self.connection_id,
+            "requested": num_sessions,
+            "created": created,
+            "failed": failed,
+            "total_sessions": self.total_sessions,
+        }
+
     def get_stats(self) -> dict:
         """Get pool statistics.
 
@@ -335,6 +408,76 @@ class SessionPoolManager:
         for connection_id, pool in self._pools.items():
             results[connection_id] = await pool.health_check()
         return results
+
+    async def warm_up_all(self) -> dict:
+        """Pre-warm pools for all configured FTP connections.
+
+        Creates pools and pre-warms sessions based on settings.
+
+        Returns:
+            Warm-up results for all connections.
+        """
+        if not self._settings.prewarm_enabled:
+            logger.info("prewarm_disabled")
+            return {"enabled": False, "connections": {}}
+
+        results = {}
+        ftp_connections = list(self._registry.get_all_ftp().keys())
+
+        if not ftp_connections:
+            logger.info("prewarm_no_connections")
+            return {"enabled": True, "connections": {}}
+
+        logger.info(
+            "prewarm_starting",
+            connections=ftp_connections,
+            sessions_per_connection=self._settings.prewarm_sessions_per_connection,
+        )
+
+        # Create pools and warm them up concurrently
+        async def warm_up_connection(connection_id: str) -> tuple[str, dict]:
+            try:
+                pool = await self._get_or_create_pool(connection_id)
+                result = await pool.warm_up(
+                    num_sessions=self._settings.prewarm_sessions_per_connection,
+                    timeout=self._settings.prewarm_timeout_seconds,
+                )
+                return connection_id, result
+            except Exception as e:
+                logger.error(
+                    "prewarm_connection_error",
+                    connection_id=connection_id,
+                    error=str(e),
+                )
+                return connection_id, {
+                    "connection_id": connection_id,
+                    "error": str(e),
+                    "created": 0,
+                    "failed": 0,
+                }
+
+        tasks = [warm_up_connection(cid) for cid in ftp_connections]
+        warm_up_results = await asyncio.gather(*tasks)
+
+        for connection_id, result in warm_up_results:
+            results[connection_id] = result
+
+        total_created = sum(r.get("created", 0) for r in results.values())
+        total_failed = sum(r.get("failed", 0) for r in results.values())
+
+        logger.info(
+            "prewarm_completed",
+            total_connections=len(ftp_connections),
+            total_created=total_created,
+            total_failed=total_failed,
+        )
+
+        return {
+            "enabled": True,
+            "total_created": total_created,
+            "total_failed": total_failed,
+            "connections": results,
+        }
 
     def get_stats(self) -> dict:
         """Get statistics for all pools.

@@ -140,6 +140,18 @@ class ConnectionRegistry:
         """
         return list(self._connections.keys())
 
+    def get_all_ftp(self) -> dict[str, FTPConnectionConfig]:
+        """Get all FTP connection configurations.
+
+        Returns:
+            Dictionary of connection_id to FTPConnectionConfig.
+        """
+        return {
+            cid: config
+            for cid, config in self._connections.items()
+            if isinstance(config, FTPConnectionConfig)
+        }
+
     def __contains__(self, connection_id: str) -> bool:
         """Check if a connection ID is registered.
 

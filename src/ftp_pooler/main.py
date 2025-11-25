@@ -125,6 +125,15 @@ class Application:
             circuit_breaker_settings=self._settings.circuit_breaker,
         )
 
+        # Pre-warm connection pools
+        prewarm_result = await self._pool_manager.warm_up_all()
+        if prewarm_result.get("enabled"):
+            logger.info(
+                "pool_prewarm_result",
+                total_created=prewarm_result.get("total_created", 0),
+                total_failed=prewarm_result.get("total_failed", 0),
+            )
+
         # Initialize Kafka producer
         self._producer = ResultProducer(self._settings.kafka)
         await self._producer.start()
