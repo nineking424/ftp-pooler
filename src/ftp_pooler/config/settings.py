@@ -33,6 +33,13 @@ class PoolSettings(BaseModel):
     session_timeout_seconds: int = Field(default=300, ge=1)
 
 
+class TransferSettings(BaseModel):
+    """Transfer configuration."""
+
+    transfer_timeout_seconds: int = Field(default=300, ge=1)
+    connect_timeout_seconds: int = Field(default=30, ge=1)
+
+
 class ApiSettings(BaseModel):
     """REST API configuration."""
 
@@ -58,6 +65,7 @@ class Settings(BaseSettings):
 
     kafka: KafkaSettings = Field(default_factory=KafkaSettings)
     pool: PoolSettings = Field(default_factory=PoolSettings)
+    transfer: TransferSettings = Field(default_factory=TransferSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
     metrics: MetricsSettings = Field(default_factory=MetricsSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)

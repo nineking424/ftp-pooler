@@ -138,6 +138,7 @@ class Application:
             pool_manager=self._pool_manager,
             on_success=self._on_transfer_success,
             on_failure=self._on_transfer_failure,
+            transfer_settings=self._settings.transfer,
         )
 
         # Initialize Kafka consumer with DLQ
@@ -273,6 +274,7 @@ class Application:
         if self._transfer_engine:
             stats["transfer"] = {
                 "tasks_in_progress": self._transfer_engine.tasks_in_progress,
+                "timeouts": self._transfer_engine.timeouts,
             }
 
         return stats

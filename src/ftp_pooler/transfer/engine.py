@@ -12,6 +12,7 @@ from ftp_pooler.config.connections import (
     ConnectionType,
     LocalConnectionConfig,
 )
+from ftp_pooler.config.settings import TransferSettings
 from ftp_pooler.pool.manager import SessionPoolManager
 from ftp_pooler.transfer.models import (
     TransferDirection,
@@ -28,6 +29,12 @@ logger = structlog.get_logger(__name__)
 ResultCallback = Callable[[TransferResult], Awaitable[None]]
 
 
+class TransferTimeoutError(Exception):
+    """Raised when a transfer operation times out."""
+
+    pass
+
+
 class TransferEngine:
     """Engine for executing file transfer tasks."""
 
@@ -37,6 +44,7 @@ class TransferEngine:
         pool_manager: SessionPoolManager,
         on_success: Optional[ResultCallback] = None,
         on_failure: Optional[ResultCallback] = None,
+        transfer_settings: Optional[TransferSettings] = None,
     ) -> None:
         """Initialize the transfer engine.
 
@@ -45,18 +53,26 @@ class TransferEngine:
             pool_manager: FTP session pool manager.
             on_success: Optional callback for successful transfers.
             on_failure: Optional callback for failed transfers.
+            transfer_settings: Optional transfer timeout settings.
         """
         self._registry = connection_registry
         self._pool_manager = pool_manager
         self._on_success = on_success
         self._on_failure = on_failure
+        self._transfer_settings = transfer_settings or TransferSettings()
         self._tasks_in_progress = 0
         self._lock = asyncio.Lock()
+        self._timeouts = 0
 
     @property
     def tasks_in_progress(self) -> int:
         """Get number of tasks currently in progress."""
         return self._tasks_in_progress
+
+    @property
+    def timeouts(self) -> int:
+        """Get number of transfers that timed out."""
+        return self._timeouts
 
     def _determine_direction(self, task: TransferTask) -> TransferDirection:
         """Determine the transfer direction.
@@ -117,22 +133,33 @@ class TransferEngine:
         self,
         task: TransferTask,
     ) -> tuple[int, int]:
-        """Execute a download transfer.
+        """Execute a download transfer with timeout.
 
         Args:
             task: The transfer task.
 
         Returns:
             Tuple of (bytes_transferred, duration_ms).
+
+        Raises:
+            TransferTimeoutError: If the transfer times out.
         """
         local_path = self._resolve_local_path(task.dst_id, task.dst_path)
+        timeout_seconds = self._transfer_settings.transfer_timeout_seconds
 
         start_time = time.monotonic()
 
-        async with self._pool_manager.acquire(task.src_id) as session:
-            bytes_transferred = await session.download(
-                remote_path=task.src_path,
-                local_path=local_path,
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                async with self._pool_manager.acquire(task.src_id) as session:
+                    bytes_transferred = await session.download(
+                        remote_path=task.src_path,
+                        local_path=local_path,
+                    )
+        except asyncio.TimeoutError:
+            raise TransferTimeoutError(
+                f"Download timed out after {timeout_seconds}s: "
+                f"{task.src_path} -> {task.dst_path}"
             )
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -142,22 +169,33 @@ class TransferEngine:
         self,
         task: TransferTask,
     ) -> tuple[int, int]:
-        """Execute an upload transfer.
+        """Execute an upload transfer with timeout.
 
         Args:
             task: The transfer task.
 
         Returns:
             Tuple of (bytes_transferred, duration_ms).
+
+        Raises:
+            TransferTimeoutError: If the transfer times out.
         """
         local_path = self._resolve_local_path(task.src_id, task.src_path)
+        timeout_seconds = self._transfer_settings.transfer_timeout_seconds
 
         start_time = time.monotonic()
 
-        async with self._pool_manager.acquire(task.dst_id) as session:
-            bytes_transferred = await session.upload(
-                local_path=local_path,
-                remote_path=task.dst_path,
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                async with self._pool_manager.acquire(task.dst_id) as session:
+                    bytes_transferred = await session.upload(
+                        local_path=local_path,
+                        remote_path=task.dst_path,
+                    )
+        except asyncio.TimeoutError:
+            raise TransferTimeoutError(
+                f"Upload timed out after {timeout_seconds}s: "
+                f"{task.src_path} -> {task.dst_path}"
             )
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -262,6 +300,23 @@ class TransferEngine:
                 duration_ms=duration_ms,
             )
             log.error("transfer_failed", error_code="IO_ERROR", error=str(e))
+
+        except TransferTimeoutError as e:
+            # Transfer timeout
+            self._timeouts += 1
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            result = TransferResult.failure(
+                task=task,
+                error_code="TRANSFER_TIMEOUT",
+                error_message=str(e),
+                duration_ms=duration_ms,
+            )
+            log.error(
+                "transfer_failed",
+                error_code="TRANSFER_TIMEOUT",
+                error=str(e),
+                timeout_seconds=self._transfer_settings.transfer_timeout_seconds,
+            )
 
         except Exception as e:
             # Unexpected error
