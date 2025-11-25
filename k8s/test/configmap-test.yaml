@@ -34,7 +34,7 @@ data:
   connections.ini: |
     [remote-ftp]
     type = ftp
-    host = 192.168.3.18
+    host = ftp-server.ftp-pooler.svc.cluster.local
     port = 21
     user = ftpuser
     pass = ftppass

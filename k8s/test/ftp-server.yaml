@@ -95,7 +95,7 @@ spec:
                   name: ftp-credentials
                   key: password
             - name: PASV_ADDRESS
-              value: "192.168.3.18"
+              value: "ftp-server.ftp-pooler.svc.cluster.local"
             - name: PASV_MIN_PORT
               value: "30000"
             - name: PASV_MAX_PORT
@@ -170,4 +170,4 @@ spec:
     - name: pasv-9
       port: 30009
       targetPort: 30009
-  type: LoadBalancer
+  type: ClusterIP
