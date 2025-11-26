@@ -27,20 +27,34 @@
 
 Kafka에서 작업 메시지를 consume하여 비동기로 FTP 전송을 수행하고, 결과를 Kafka 토픽에 publish합니다.
 
-```
-┌─────────────┐     ┌──────────────────────────────────────────┐     ┌─────────────┐
-│   Kafka     │     │            FTP Pooler Pod                │     │  FTP Server │
-│  ftp-tasks  │────▶│  Consumer → Session Pool → Transfer     │────▶│             │
-│             │     │                                          │     │             │
-│ ftp-results │◀────│  Producer ← Result Handler               │     │             │
-│ftp-failures │◀────│                                          │     │             │
-└─────────────┘     └──────────────────────────────────────────┘     └─────────────┘
-                                      │
-                                      ▼
-                              ┌──────────────┐
-                              │  Prometheus  │
-                              │   :9090      │
-                              └──────────────┘
+```mermaid
+flowchart LR
+    subgraph Kafka
+        ftp-tasks[ftp-tasks]
+        ftp-results[ftp-results]
+        ftp-failures[ftp-failures]
+    end
+
+    subgraph FTP_Pooler_Pod[FTP Pooler Pod]
+        Consumer --> SessionPool[Session Pool]
+        SessionPool --> Transfer
+        Transfer --> ResultHandler[Result Handler]
+        ResultHandler --> Producer
+    end
+
+    subgraph FTP_Server[FTP Server]
+        FTP[FTP]
+    end
+
+    subgraph Monitoring
+        Prometheus[:9090]
+    end
+
+    ftp-tasks --> Consumer
+    Producer --> ftp-results
+    Producer --> ftp-failures
+    Transfer --> FTP
+    FTP_Pooler_Pod --> Prometheus
 ```
 
 ## 프로젝트 구조

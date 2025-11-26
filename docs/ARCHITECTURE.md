@@ -29,52 +29,51 @@ FTP Pooler는 Kafka 메시지 기반의 비동기 FTP 파일 전송 시스템입
 
 ### 1.2 시스템 아키텍처 다이어그램
 
-```
-                                    ┌─────────────────────────────────────┐
-                                    │         Kubernetes Cluster          │
-                                    │                                     │
-┌──────────────┐                    │  ┌─────────────────────────────┐   │
-│              │                    │  │     FTP Pooler StatefulSet  │   │
-│    Client    │                    │  │                             │   │
-│  Application │                    │  │  ┌───────┐ ┌───────┐       │   │
-│              │                    │  │  │ Pod-0 │ │ Pod-1 │ ...   │   │
-└──────┬───────┘                    │  │  └───┬───┘ └───┬───┘       │   │
-       │                            │  │      │         │           │   │
-       │ Produce                    │  └──────┼─────────┼───────────┘   │
-       │                            │         │         │               │
-       ▼                            │         │         │               │
-┌──────────────┐                    │         ▼         ▼               │
-│              │    Consume         │  ┌─────────────────────────────┐  │
-│    Kafka     │◀───────────────────┼──│    FTP Session Pool         │  │
-│   Cluster    │                    │  │                             │  │
-│              │                    │  │  ┌────────────────────────┐ │  │
-│ ┌──────────┐ │                    │  │  │  Connection A Pool     │ │  │
-│ │ftp-tasks │ │                    │  │  │  ┌──────┐ ┌──────┐    │ │  │
-│ └──────────┘ │                    │  │  │  │Sess 1│ │Sess 2│... │ │  │
-│              │                    │  │  │  └──────┘ └──────┘    │ │  │
-│ ┌──────────┐ │    Produce         │  │  └────────────────────────┘ │  │
-│ │ftp-results│◀────────────────────┼──│                             │  │
-│ └──────────┘ │                    │  │  ┌────────────────────────┐ │  │
-│              │                    │  │  │  Connection B Pool     │ │  │
-│ ┌──────────┐ │                    │  │  │  ┌──────┐ ┌──────┐    │ │  │
-│ │ftp-failures│◀───────────────────┼──│  │  │Sess 1│ │Sess 2│... │ │  │
-│ └──────────┘ │                    │  │  │  └──────┘ └──────┘    │ │  │
-└──────────────┘                    │  │  └────────────────────────┘ │  │
-                                    │  └─────────────────────────────┘  │
-                                    │                │                  │
-                                    │                ▼                  │
-                                    │  ┌─────────────────────────────┐  │
-                                    │  │       FTP Servers           │  │
-                                    │  │  ┌─────┐ ┌─────┐ ┌─────┐   │  │
-                                    │  │  │ A   │ │ B   │ │ C   │   │  │
-                                    │  │  └─────┘ └─────┘ └─────┘   │  │
-                                    │  └─────────────────────────────┘  │
-                                    │                                   │
-                                    │  ┌─────────────────────────────┐  │
-                                    │  │     Local Storage (PVC)     │  │
-                                    │  │     /data/storage           │  │
-                                    │  └─────────────────────────────┘  │
-                                    └───────────────────────────────────┘
+```mermaid
+flowchart TB
+    Client[Client Application]
+
+    subgraph Kafka[Kafka Cluster]
+        ftp-tasks[ftp-tasks]
+        ftp-results[ftp-results]
+        ftp-failures[ftp-failures]
+    end
+
+    subgraph K8s[Kubernetes Cluster]
+        subgraph StatefulSet[FTP Pooler StatefulSet]
+            Pod0[Pod-0]
+            Pod1[Pod-1]
+        end
+
+        subgraph SessionPool[FTP Session Pool]
+            subgraph PoolA[Connection A Pool]
+                SessA1[Sess 1]
+                SessA2[Sess 2]
+            end
+            subgraph PoolB[Connection B Pool]
+                SessB1[Sess 1]
+                SessB2[Sess 2]
+            end
+        end
+
+        subgraph FTPServers[FTP Servers]
+            ServerA[A]
+            ServerB[B]
+            ServerC[C]
+        end
+
+        LocalStorage[Local Storage PVC\n/data/storage]
+    end
+
+    Client -->|Produce| ftp-tasks
+    ftp-tasks -->|Consume| Pod0
+    ftp-tasks -->|Consume| Pod1
+    Pod0 --> SessionPool
+    Pod1 --> SessionPool
+    SessionPool -->|Produce| ftp-results
+    SessionPool -->|Produce| ftp-failures
+    SessionPool --> FTPServers
+    SessionPool <--> LocalStorage
 ```
 
 ---
@@ -83,40 +82,40 @@ FTP Pooler는 Kafka 메시지 기반의 비동기 FTP 파일 전송 시스템입
 
 ### 2.1 컴포넌트 구조
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Application                              │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                     Main Application                       │  │
-│  │  - 생명주기 관리 (initialize, start, stop)                 │  │
-│  │  - 시그널 핸들링 (SIGTERM, SIGINT)                         │  │
-│  │  - 컴포넌트 조율                                           │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│       ┌──────────────────────┼──────────────────────┐           │
-│       │                      │                      │           │
-│       ▼                      ▼                      ▼           │
-│  ┌─────────┐          ┌─────────────┐        ┌──────────┐      │
-│  │ Kafka   │          │  Transfer   │        │   API    │      │
-│  │ Layer   │          │   Engine    │        │  Server  │      │
-│  │         │          │             │        │          │      │
-│  │┌───────┐│          │┌───────────┐│        │┌────────┐│      │
-│  ││Consumer│─────────▶││   Pool    ││        ││ Routes ││      │
-│  │└───────┘│          ││  Manager  ││        │└────────┘│      │
-│  │         │          │└───────────┘│        │          │      │
-│  │┌───────┐│◀─────────│             │        │          │      │
-│  ││Producer│          └─────────────┘        └──────────┘      │
-│  │└───────┘│                                                    │
-│  └─────────┘                                                    │
-│                                                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                    Config Layer                            │  │
-│  │  ┌────────────────┐  ┌────────────────────────────────┐   │  │
-│  │  │    Settings    │  │    Connection Registry         │   │  │
-│  │  │  (config.yaml) │  │    (connections.ini)           │   │  │
-│  │  └────────────────┘  └────────────────────────────────┘   │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Application
+        subgraph MainApp[Main Application]
+            Lifecycle[생명주기 관리\ninitialize, start, stop]
+            Signal[시그널 핸들링\nSIGTERM, SIGINT]
+            Orchestration[컴포넌트 조율]
+        end
+
+        subgraph KafkaLayer[Kafka Layer]
+            Consumer
+            Producer
+        end
+
+        subgraph TransferEngine[Transfer Engine]
+            PoolManager[Pool Manager]
+        end
+
+        subgraph APIServer[API Server]
+            Routes
+        end
+
+        subgraph ConfigLayer[Config Layer]
+            Settings[Settings\nconfig.yaml]
+            ConnRegistry[Connection Registry\nconnections.ini]
+        end
+    end
+
+    MainApp --> KafkaLayer
+    MainApp --> TransferEngine
+    MainApp --> APIServer
+
+    Consumer --> PoolManager
+    PoolManager --> Producer
 ```
 
 ### 2.2 컴포넌트 책임
@@ -139,69 +138,41 @@ FTP Pooler는 Kafka 메시지 기반의 비동기 FTP 파일 전송 시스템입
 
 ### 3.1 작업 처리 흐름
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                           Task Processing Flow                            │
-└──────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Input[Task Input]
+        KafkaConsumer[Kafka Consumer] --> TaskConsumer[Task Consumer]
+        TaskConsumer --> TransferEngine[Transfer Engine]
+    end
 
-     ┌─────────┐        ┌────────────┐        ┌──────────────┐
-     │  Kafka  │        │    Task    │        │   Transfer   │
-     │Consumer │───────▶│  Consumer  │───────▶│    Engine    │
-     └─────────┘        └────────────┘        └──────┬───────┘
-                                                     │
-                        ┌────────────────────────────┼────────────────────────────┐
-                        │                            │                            │
-                        ▼                            ▼                            ▼
-                  ┌──────────┐              ┌──────────────┐              ┌──────────┐
-                  │ Determine │              │   Acquire    │              │  Execute │
-                  │ Direction │              │   Session    │              │ Transfer │
-                  └──────────┘              └──────────────┘              └──────────┘
-                        │                            │                            │
-                        │                            │                            │
-                        │                    ┌───────┴───────┐                    │
-                        │                    │               │                    │
-                        │               [Session Pool]  [Create New]              │
-                        │                    │               │                    │
-                        │                    ▼               ▼                    │
-                        │              ┌──────────┐   ┌──────────┐               │
-                        │              │  Reuse   │   │  Connect │               │
-                        │              │  Session │   │  to FTP  │               │
-                        │              └──────────┘   └──────────┘               │
-                        │                    │               │                    │
-                        │                    └───────┬───────┘                    │
-                        │                            │                            │
-                        │                            ▼                            │
-                        │                    ┌──────────────┐                     │
-                        │                    │   Download   │                     │
-                        ▼                    │      or      │                     │
-                  ┌──────────┐              │    Upload    │                     │
-                  │ Download │              └──────────────┘                     │
-                  │(remote→  │                      │                            │
-                  │  local)  │                      │                            │
-                  └──────────┘                      │                            │
-                        │                           │                            │
-                        │                           ▼                            │
-                  ┌──────────┐              ┌──────────────┐              ┌──────────┐
-                  │  Upload  │              │   Release    │              │  Create  │
-                  │ (local→  │              │   Session    │              │  Result  │
-                  │ remote)  │              └──────────────┘              └──────────┘
-                  └──────────┘                      │                            │
-                        │                           │                            │
-                        └───────────────────────────┼────────────────────────────┘
-                                                    │
-                                                    ▼
-                                            ┌──────────────┐
-                                            │   Publish    │
-                                            │   to Kafka   │
-                                            └──────────────┘
-                                                    │
-                                   ┌────────────────┼────────────────┐
-                                   │                                 │
-                                   ▼                                 ▼
-                           ┌─────────────┐                   ┌─────────────┐
-                           │ ftp-results │                   │ftp-failures │
-                           │   (성공)     │                   │   (실패)     │
-                           └─────────────┘                   └─────────────┘
+    subgraph Processing[Task Processing]
+        TransferEngine --> DetermineDir[Determine Direction]
+        TransferEngine --> AcquireSession[Acquire Session]
+        TransferEngine --> ExecuteTransfer[Execute Transfer]
+
+        AcquireSession --> SessionPool[Session Pool]
+        AcquireSession --> CreateNew[Create New]
+
+        SessionPool --> ReuseSession[Reuse Session]
+        CreateNew --> ConnectFTP[Connect to FTP]
+
+        ReuseSession --> Transfer[Download or Upload]
+        ConnectFTP --> Transfer
+
+        DetermineDir --> Download[Download\nremote→local]
+        DetermineDir --> Upload[Upload\nlocal→remote]
+    end
+
+    subgraph Complete[Task Complete]
+        Transfer --> ReleaseSession[Release Session]
+        ExecuteTransfer --> CreateResult[Create Result]
+
+        ReleaseSession --> PublishKafka[Publish to Kafka]
+        CreateResult --> PublishKafka
+
+        PublishKafka --> ftp-results[ftp-results\n성공]
+        PublishKafka --> ftp-failures[ftp-failures\n실패]
+    end
 ```
 
 ### 3.2 메시지 변환
@@ -247,62 +218,45 @@ FTP Pooler는 Kafka 메시지 기반의 비동기 FTP 파일 전송 시스템입
 
 세션 풀은 FTP 연결을 효율적으로 관리합니다.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    SessionPoolManager                            │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  Settings:                                                 │  │
-│  │  - max_sessions_per_pod: 100                              │  │
-│  │  - max_sessions_per_connection: 10                        │  │
-│  │  - session_timeout_seconds: 300                           │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  Connection Pools                                           ││
-│  │                                                             ││
-│  │  ┌─────────────────┐  ┌─────────────────┐  ┌────────────┐  ││
-│  │  │ Pool: server-a  │  │ Pool: server-b  │  │ Pool: ...  │  ││
-│  │  │                 │  │                 │  │            │  ││
-│  │  │ ┌─────────────┐ │  │ ┌─────────────┐ │  │            │  ││
-│  │  │ │ Session 1   │ │  │ │ Session 1   │ │  │            │  ││
-│  │  │ │ state: IDLE │ │  │ │ state: BUSY │ │  │            │  ││
-│  │  │ └─────────────┘ │  │ └─────────────┘ │  │            │  ││
-│  │  │ ┌─────────────┐ │  │ ┌─────────────┐ │  │            │  ││
-│  │  │ │ Session 2   │ │  │ │ Session 2   │ │  │            │  ││
-│  │  │ │ state: BUSY │ │  │ │ state: IDLE │ │  │            │  ││
-│  │  │ └─────────────┘ │  │ └─────────────┘ │  │            │  ││
-│  │  │ max: 10         │  │ max: 10         │  │            │  ││
-│  │  └─────────────────┘  └─────────────────┘  └────────────┘  ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph SessionPoolManager
+        subgraph Settings
+            S1[max_sessions_per_pod: 100]
+            S2[max_sessions_per_connection: 10]
+            S3[session_timeout_seconds: 300]
+        end
+
+        subgraph ConnectionPools[Connection Pools]
+            subgraph PoolA[Pool: server-a\nmax: 10]
+                A1[Session 1\nstate: IDLE]
+                A2[Session 2\nstate: BUSY]
+            end
+
+            subgraph PoolB[Pool: server-b\nmax: 10]
+                B1[Session 1\nstate: BUSY]
+                B2[Session 2\nstate: IDLE]
+            end
+
+            PoolC[Pool: ...]
+        end
+    end
 ```
 
 #### 세션 상태 전이
 
-```
-                    ┌──────────────┐
-                    │ DISCONNECTED │
-                    └──────┬───────┘
-                           │ connect()
-                           ▼
-    ┌─────────────────────────────────────────┐
-    │                                         │
-    │         ┌────────────┐                  │
-    │         │    IDLE    │◀─────────────────┤
-    │         └─────┬──────┘                  │
-    │               │ acquire()               │
-    │               ▼                         │
-    │         ┌────────────┐                  │
-    │         │    BUSY    │──────────────────┤
-    │         └─────┬──────┘   release()      │
-    │               │                         │
-    │               │ error                   │
-    │               ▼                         │
-    │         ┌────────────┐                  │
-    │         │   ERROR    │──────────────────┘
-    │         └────────────┘   recover()
-    │
-    └─────────────────────────────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> DISCONNECTED
+    DISCONNECTED --> IDLE: connect()
+
+    IDLE --> BUSY: acquire()
+    BUSY --> IDLE: release()
+    BUSY --> ERROR: error
+
+    ERROR --> IDLE: recover()
+
+    IDLE --> DISCONNECTED: disconnect()
 ```
 
 ### 4.2 Transfer Engine
@@ -323,78 +277,59 @@ def _determine_direction(task):
     return UPLOAD if src_is_local else DOWNLOAD
 ```
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                       TransferEngine                             │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  Direction Detection                                        ││
-│  │                                                             ││
-│  │  src_id: remote-ftp    dst_id: local                       ││
-│  │     │                      │                                ││
-│  │     ▼                      ▼                                ││
-│  │  type: FTP             type: LOCAL                          ││
-│  │     │                      │                                ││
-│  │     └──────────┬───────────┘                                ││
-│  │                ▼                                            ││
-│  │         Direction: DOWNLOAD                                 ││
-│  │         (remote → local)                                    ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                                                                  │
-│  ┌──────────────────────┐  ┌──────────────────────┐            │
-│  │  _execute_download   │  │   _execute_upload    │            │
-│  │                      │  │                      │            │
-│  │  1. Resolve local    │  │  1. Resolve local    │            │
-│  │     path             │  │     path             │            │
-│  │  2. Acquire FTP      │  │  2. Acquire FTP      │            │
-│  │     session          │  │     session          │            │
-│  │  3. Download file    │  │  3. Upload file      │            │
-│  │  4. Release session  │  │  4. Release session  │            │
-│  └──────────────────────┘  └──────────────────────┘            │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph TransferEngine
+        subgraph DirectionDetection[Direction Detection]
+            SrcID[src_id: remote-ftp] --> SrcType[type: FTP]
+            DstID[dst_id: local] --> DstType[type: LOCAL]
+            SrcType --> Direction[Direction: DOWNLOAD\nremote → local]
+            DstType --> Direction
+        end
+
+        subgraph Download[_execute_download]
+            D1[1. Resolve local path]
+            D2[2. Acquire FTP session]
+            D3[3. Download file]
+            D4[4. Release session]
+            D1 --> D2 --> D3 --> D4
+        end
+
+        subgraph Upload[_execute_upload]
+            U1[1. Resolve local path]
+            U2[2. Acquire FTP session]
+            U3[3. Upload file]
+            U4[4. Release session]
+            U1 --> U2 --> U3 --> U4
+        end
+    end
 ```
 
 ### 4.3 Kafka Integration
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Kafka Integration                           │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  TaskConsumer                                               ││
-│  │                                                             ││
-│  │  - bootstrap_servers: kafka:9092                           ││
-│  │  - group_id: ftp-pooler                                    ││
-│  │  - topic: ftp-tasks                                        ││
-│  │  - auto_offset_reset: earliest                             ││
-│  │  - enable_auto_commit: false (수동 커밋)                    ││
-│  │                                                             ││
-│  │  ┌───────────────────────────────────────────────────────┐ ││
-│  │  │  Message Flow                                          │ ││
-│  │  │                                                        │ ││
-│  │  │  Kafka ──▶ Deserialize ──▶ Validate ──▶ TransferTask  │ ││
-│  │  │              (JSON)         (Required                  │ ││
-│  │  │                              fields)                   │ ││
-│  │  └───────────────────────────────────────────────────────┘ ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  ResultProducer                                             ││
-│  │                                                             ││
-│  │  - result_topic: ftp-results                               ││
-│  │  - fail_topic: ftp-failures                                ││
-│  │                                                             ││
-│  │  ┌───────────────────────────────────────────────────────┐ ││
-│  │  │  Routing Logic                                         │ ││
-│  │  │                                                        │ ││
-│  │  │  TransferResult                                        │ ││
-│  │  │       │                                                │ ││
-│  │  │       ├─▶ status == SUCCESS ──▶ ftp-results           │ ││
-│  │  │       │                                                │ ││
-│  │  │       └─▶ status == FAILED  ──▶ ftp-failures          │ ││
-│  │  └───────────────────────────────────────────────────────┘ ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph KafkaIntegration[Kafka Integration]
+        subgraph TaskConsumer
+            TC_Config[bootstrap_servers: kafka:9092\ngroup_id: ftp-pooler\ntopic: ftp-tasks\nauto_offset_reset: earliest\nenable_auto_commit: false]
+
+            subgraph MessageFlow[Message Flow]
+                Kafka2[Kafka] --> Deserialize[Deserialize\nJSON]
+                Deserialize --> Validate[Validate\nRequired fields]
+                Validate --> TransferTask
+            end
+        end
+
+        subgraph ResultProducer
+            RP_Config[result_topic: ftp-results\nfail_topic: ftp-failures]
+
+            subgraph RoutingLogic[Routing Logic]
+                TransferResult --> SuccessCheck{status}
+                SuccessCheck -->|SUCCESS| ftp-results2[ftp-results]
+                SuccessCheck -->|FAILED| ftp-failures2[ftp-failures]
+            end
+        end
+    end
 ```
 
 ---
@@ -403,28 +338,17 @@ def _determine_direction(task):
 
 ### 5.1 설정 계층
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Configuration Hierarchy                       │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  1. Environment Variables (최우선)                          ││
-│  │     FTP_POOLER_CONFIG=/etc/ftp-pooler/config.yaml          ││
-│  │     FTP_POOLER_CONNECTIONS=/etc/ftp-pooler/connections.ini ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                              │                                   │
-│                              ▼                                   │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  2. YAML Configuration File                                 ││
-│  │     config.yaml: kafka, pool, api, metrics, logging        ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                              │                                   │
-│                              ▼                                   │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  3. Default Values (Pydantic)                               ││
-│  │     Settings 클래스에 정의된 기본값                          ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph ConfigHierarchy[Configuration Hierarchy]
+        L1[1. Environment Variables - 최우선\nFTP_POOLER_CONFIG=/etc/ftp-pooler/config.yaml\nFTP_POOLER_CONNECTIONS=/etc/ftp-pooler/connections.ini]
+
+        L2[2. YAML Configuration File\nconfig.yaml: kafka, pool, api, metrics, logging]
+
+        L3[3. Default Values - Pydantic\nSettings 클래스에 정의된 기본값]
+
+        L1 --> L2 --> L3
+    end
 ```
 
 ### 5.2 설정 클래스 구조
@@ -460,38 +384,19 @@ Settings
 
 ### 5.3 연결 레지스트리
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Connection Registry                           │
-│                                                                  │
-│  connections.ini                                                 │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  [remote-server-a]                                          ││
-│  │  type = ftp                                                 ││
-│  │  host = ftp.example.com                                     ││
-│  │  port = 21                                                  ││
-│  │  user = username                                            ││
-│  │  pass = password                                            ││
-│  │  passive = true                                             ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                              │                                   │
-│                              ▼                                   │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  ConnectionRegistry                                         ││
-│  │                                                             ││
-│  │  ┌──────────────────┐  ┌──────────────────┐                ││
-│  │  │ FTPConnectionConfig │ LocalConnectionConfig │           ││
-│  │  │                    │  │                    │             ││
-│  │  │ connection_id      │  │ connection_id      │             ││
-│  │  │ type: FTP          │  │ type: LOCAL        │             ││
-│  │  │ host               │  │ base_path          │             ││
-│  │  │ port               │  │                    │             ││
-│  │  │ user               │  │                    │             ││
-│  │  │ password           │  │                    │             ││
-│  │  │ passive            │  │                    │             ││
-│  │  └──────────────────┘  └──────────────────┘                ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph ConnectionRegistry[Connection Registry]
+        INI[connections.ini\n\nremote-server-a\ntype = ftp\nhost = ftp.example.com\nport = 21\nuser = username\npass = password\npassive = true]
+
+        subgraph Registry[ConnectionRegistry]
+            FTPConfig[FTPConnectionConfig\n\nconnection_id\ntype: FTP\nhost\nport\nuser\npassword\npassive]
+
+            LocalConfig[LocalConnectionConfig\n\nconnection_id\ntype: LOCAL\nbase_path]
+        end
+
+        INI --> Registry
+    end
 ```
 
 ---
@@ -500,43 +405,49 @@ Settings
 
 ### 6.1 수평 확장 (Scale-Out)
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Horizontal Scaling                            │
-│                                                                  │
-│  Kafka Partitions: 3                                            │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐                         │
-│  │   P0    │  │   P1    │  │   P2    │                         │
-│  └────┬────┘  └────┬────┘  └────┬────┘                         │
-│       │            │            │                               │
-│       │   Consumer Group: ftp-pooler                           │
-│       │            │            │                               │
-│       ▼            ▼            ▼                               │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐                         │
-│  │ Pod-0   │  │ Pod-1   │  │ Pod-2   │                         │
-│  │         │  │         │  │         │                         │
-│  │ P0 담당  │  │ P1 담당  │  │ P2 담당  │                         │
-│  └─────────┘  └─────────┘  └─────────┘                         │
-│                                                                  │
-│  StatefulSet Scaling:                                           │
-│  kubectl scale statefulset ftp-pooler --replicas=3             │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph HorizontalScaling[Horizontal Scaling]
+        subgraph KafkaPartitions[Kafka Partitions: 3]
+            P0[P0]
+            P1[P1]
+            P2[P2]
+        end
+
+        CG[Consumer Group: ftp-pooler]
+
+        subgraph Pods[Pods]
+            Pod0[Pod-0\nP0 담당]
+            Pod1[Pod-1\nP1 담당]
+            Pod2[Pod-2\nP2 담당]
+        end
+
+        P0 --> CG --> Pod0
+        P1 --> CG --> Pod1
+        P2 --> CG --> Pod2
+
+        Scale[StatefulSet Scaling:\nkubectl scale statefulset ftp-pooler --replicas=3]
+    end
 ```
 
 ### 6.2 연결별 동시성 제어
 
-```
-Pod-0 (max_sessions_per_pod: 100)
-├── Server-A Pool (max: 10)
-│   ├── Session 1 (BUSY)
-│   ├── Session 2 (IDLE)
-│   └── ... (최대 10개)
-│
-├── Server-B Pool (max: 10)
-│   ├── Session 1 (BUSY)
-│   └── ... (최대 10개)
-│
-└── 총 세션 수 ≤ 100
+```mermaid
+flowchart TB
+    subgraph Pod0[Pod-0 - max_sessions_per_pod: 100]
+        subgraph ServerAPool[Server-A Pool - max: 10]
+            SA1[Session 1 - BUSY]
+            SA2[Session 2 - IDLE]
+            SA3[... 최대 10개]
+        end
+
+        subgraph ServerBPool[Server-B Pool - max: 10]
+            SB1[Session 1 - BUSY]
+            SB2[... 최대 10개]
+        end
+
+        Total[총 세션 수 ≤ 100]
+    end
 ```
 
 ---
@@ -555,47 +466,24 @@ Pod-0 (max_sessions_per_pod: 100)
 
 ### 7.2 에러 처리 흐름
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Error Handling Flow                          │
-│                                                                  │
-│  ┌─────────────┐                                                │
-│  │   Execute   │                                                │
-│  │  Transfer   │                                                │
-│  └──────┬──────┘                                                │
-│         │                                                        │
-│         ├─────────────────────────────────────────┐              │
-│         │                                         │              │
-│         ▼                                         ▼              │
-│  ┌─────────────┐                          ┌─────────────┐       │
-│  │   Success   │                          │    Error    │       │
-│  └──────┬──────┘                          └──────┬──────┘       │
-│         │                                        │              │
-│         ▼                                        ▼              │
-│  ┌─────────────┐                          ┌─────────────┐       │
-│  │   Create    │                          │   Create    │       │
-│  │   Result    │                          │   Result    │       │
-│  │  (SUCCESS)  │                          │  (FAILED)   │       │
-│  └──────┬──────┘                          └──────┬──────┘       │
-│         │                                        │              │
-│         ▼                                        ▼              │
-│  ┌─────────────┐                          ┌─────────────┐       │
-│  │   Publish   │                          │   Publish   │       │
-│  │ ftp-results │                          │ftp-failures │       │
-│  └─────────────┘                          └─────────────┘       │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  Logging (structlog)                                        ││
-│  │                                                             ││
-│  │  {                                                          ││
-│  │    "event": "transfer_failed",                              ││
-│  │    "task_id": "uuid-1234",                                  ││
-│  │    "error_code": "CONNECTION_ERROR",                        ││
-│  │    "error": "Connection refused",                           ││
-│  │    "duration_ms": 5000                                      ││
-│  │  }                                                          ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    Execute[Execute Transfer]
+
+    Execute --> Success
+    Execute --> Error
+
+    Success --> CreateSuccessResult[Create Result\nSUCCESS]
+    Error --> CreateFailedResult[Create Result\nFAILED]
+
+    CreateSuccessResult --> PublishResults[Publish\nftp-results]
+    CreateFailedResult --> PublishFailures[Publish\nftp-failures]
+
+    subgraph Logging[Logging - structlog]
+        LogEntry["{\n  event: transfer_failed\n  task_id: uuid-1234\n  error_code: CONNECTION_ERROR\n  error: Connection refused\n  duration_ms: 5000\n}"]
+    end
+
+    Error --> Logging
 ```
 
 ---
@@ -604,37 +492,20 @@ Pod-0 (max_sessions_per_pod: 100)
 
 ### 8.1 인증 정보 관리
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Credential Management                         │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  Kubernetes Secret                                          ││
-│  │                                                             ││
-│  │  apiVersion: v1                                             ││
-│  │  kind: Secret                                               ││
-│  │  metadata:                                                  ││
-│  │    name: ftp-pooler-secrets                                 ││
-│  │  data:                                                      ││
-│  │    connections.ini: <base64 encoded>                        ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                              │                                   │
-│                              ▼                                   │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  Pod Volume Mount                                           ││
-│  │                                                             ││
-│  │  volumes:                                                   ││
-│  │    - name: connections                                      ││
-│  │      secret:                                                ││
-│  │        secretName: ftp-pooler-secrets                       ││
-│  │                                                             ││
-│  │  volumeMounts:                                              ││
-│  │    - name: connections                                      ││
-│  │      mountPath: /etc/ftp-pooler/connections.ini             ││
-│  │      subPath: connections.ini                               ││
-│  │      readOnly: true                                         ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph CredentialManagement[Credential Management]
+        subgraph K8sSecret[Kubernetes Secret]
+            Secret["apiVersion: v1\nkind: Secret\nmetadata:\n  name: ftp-pooler-secrets\ndata:\n  connections.ini: base64 encoded"]
+        end
+
+        subgraph PodMount[Pod Volume Mount]
+            Volumes["volumes:\n  - name: connections\n    secret:\n      secretName: ftp-pooler-secrets"]
+            VolumeMounts["volumeMounts:\n  - name: connections\n    mountPath: /etc/ftp-pooler/connections.ini\n    subPath: connections.ini\n    readOnly: true"]
+        end
+
+        K8sSecret --> PodMount
+    end
 ```
 
 ### 8.2 네트워크 보안
@@ -663,69 +534,76 @@ USER appuser
 
 ### A. 클래스 다이어그램
 
-```
-┌─────────────────┐         ┌─────────────────┐
-│   Application   │────────▶│    Settings     │
-└────────┬────────┘         └─────────────────┘
-         │
-         │ has
-         │
-┌────────┼─────────────────────────────────────────┐
-│        │                                         │
-│        ▼                                         │
-│  ┌───────────┐    ┌─────────────┐    ┌─────────┐│
-│  │TaskConsumer│   │TransferEngine│   │ResultProducer│
-│  └─────┬─────┘    └──────┬──────┘    └─────────┘│
-│        │                 │                       │
-│        │                 │ uses                  │
-│        │                 ▼                       │
-│        │        ┌─────────────────┐              │
-│        │        │SessionPoolManager│             │
-│        │        └────────┬────────┘              │
-│        │                 │                       │
-│        │                 │ manages               │
-│        │                 ▼                       │
-│        │        ┌─────────────────┐              │
-│        │        │   SessionPool   │              │
-│        │        └────────┬────────┘              │
-│        │                 │                       │
-│        │                 │ contains              │
-│        │                 ▼                       │
-│        │        ┌─────────────────┐              │
-│        │        │   FTPSession    │              │
-│        │        └─────────────────┘              │
-│        │                                         │
-│        │ processes                               │
-│        ▼                                         │
-│  ┌───────────┐                                   │
-│  │TransferTask│                                  │
-│  └───────────┘                                   │
-└──────────────────────────────────────────────────┘
+```mermaid
+classDiagram
+    Application --> Settings
+    Application --> TaskConsumer
+    Application --> TransferEngine
+    Application --> ResultProducer
+
+    TransferEngine --> SessionPoolManager
+    SessionPoolManager --> SessionPool
+    SessionPool --> FTPSession
+
+    TaskConsumer --> TransferTask
+
+    class Application {
+        +Settings settings
+        +TaskConsumer consumer
+        +TransferEngine engine
+        +ResultProducer producer
+    }
+
+    class Settings {
+        +KafkaSettings kafka
+        +PoolSettings pool
+        +ApiSettings api
+    }
+
+    class SessionPoolManager {
+        +manage()
+    }
+
+    class SessionPool {
+        +acquire()
+        +release()
+    }
+
+    class FTPSession {
+        +connect()
+        +disconnect()
+        +download()
+        +upload()
+    }
+
+    class TransferTask {
+        +task_id
+        +src_id
+        +src_path
+        +dst_id
+        +dst_path
+    }
 ```
 
 ### B. 시퀀스 다이어그램 (파일 다운로드)
 
-```
-Client          Kafka       Consumer    Engine      Pool        FTP
-  │               │            │          │          │           │
-  │──produce()───▶│            │          │          │           │
-  │               │            │          │          │           │
-  │               │──consume()─▶│         │          │           │
-  │               │            │          │          │           │
-  │               │            │─execute()▶│         │          │
-  │               │            │          │          │           │
-  │               │            │          │─acquire()▶│          │
-  │               │            │          │          │           │
-  │               │            │          │◀─session─│           │
-  │               │            │          │          │           │
-  │               │            │          │─────download()──────▶│
-  │               │            │          │          │           │
-  │               │            │          │◀─────bytes──────────│
-  │               │            │          │          │           │
-  │               │            │          │─release()▶│          │
-  │               │            │          │          │           │
-  │               │            │◀─result──│          │           │
-  │               │            │          │          │           │
-  │               │◀─produce()─│          │          │           │
-  │               │            │          │          │           │
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Kafka
+    participant Consumer
+    participant Engine
+    participant Pool
+    participant FTP
+
+    Client->>Kafka: produce()
+    Kafka->>Consumer: consume()
+    Consumer->>Engine: execute()
+    Engine->>Pool: acquire()
+    Pool-->>Engine: session
+    Engine->>FTP: download()
+    FTP-->>Engine: bytes
+    Engine->>Pool: release()
+    Engine-->>Consumer: result
+    Consumer->>Kafka: produce()
 ```
