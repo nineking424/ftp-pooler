@@ -2,6 +2,8 @@
 
 import pytest
 
+from ftp_pooler.config.settings import TransferSettings
+from ftp_pooler.transfer.engine import TransferTimeoutError
 from ftp_pooler.transfer.models import (
     TransferDirection,
     TransferResult,
@@ -192,3 +194,83 @@ class TestTransferEnums:
         """Test TransferDirection enum values."""
         assert TransferDirection.DOWNLOAD.value == "download"
         assert TransferDirection.UPLOAD.value == "upload"
+
+
+class TestTransferSettings:
+    """Tests for TransferSettings."""
+
+    def test_default_settings(self) -> None:
+        """Test default transfer settings."""
+        settings = TransferSettings()
+
+        assert settings.transfer_timeout_seconds == 300
+        assert settings.connect_timeout_seconds == 30
+
+    def test_custom_settings(self) -> None:
+        """Test custom transfer settings."""
+        settings = TransferSettings(
+            transfer_timeout_seconds=600,
+            connect_timeout_seconds=60,
+        )
+
+        assert settings.transfer_timeout_seconds == 600
+        assert settings.connect_timeout_seconds == 60
+
+
+class TestTransferTimeoutError:
+    """Tests for TransferTimeoutError exception."""
+
+    def test_error_message(self) -> None:
+        """Test timeout error message."""
+        error = TransferTimeoutError("Download timed out after 300s")
+
+        assert "timed out" in str(error)
+        assert "300s" in str(error)
+
+
+class TestTransferResultWithTimeout:
+    """Tests for TransferResult with timeout error code."""
+
+    def test_timeout_failure_result(self) -> None:
+        """Test creating failure result with TRANSFER_TIMEOUT error code."""
+        task = TransferTask(
+            task_id="test-timeout",
+            src_id="remote",
+            src_path="/large/file.bin",
+            dst_id="local",
+            dst_path="/dst/file.bin",
+        )
+
+        result = TransferResult.failure(
+            task=task,
+            error_code="TRANSFER_TIMEOUT",
+            error_message="Transfer timed out after 300s",
+            duration_ms=300000,
+        )
+
+        assert result.status == TransferStatus.FAILED
+        assert result.error_code == "TRANSFER_TIMEOUT"
+        assert "300s" in result.error_message
+        assert result.duration_ms == 300000
+
+    def test_to_dict_includes_timeout_error(self) -> None:
+        """Test to_dict includes timeout error details."""
+        task = TransferTask(
+            task_id="test-timeout",
+            src_id="remote",
+            src_path="/src",
+            dst_id="local",
+            dst_path="/dst",
+        )
+
+        result = TransferResult.failure(
+            task=task,
+            error_code="TRANSFER_TIMEOUT",
+            error_message="Operation timed out",
+        )
+
+        data = result.to_dict()
+
+        assert data["status"] == "failed"
+        assert data["error_code"] == "TRANSFER_TIMEOUT"
+        assert data["error_message"] == "Operation timed out"

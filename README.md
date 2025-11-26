@@ -14,9 +14,10 @@ FTP Pooler는 대량의 파일을 FTP 프로토콜을 통해 효율적으로 전
 
 - **고성능**: asyncio 기반 비동기 처리로 동시에 다수의 파일 전송
 - **확장성**: Kubernetes StatefulSet으로 손쉬운 수평 확장 (scale-out)
-- **안정성**: FTP 세션 풀링으로 연결 재사용 및 효율적인 리소스 관리
-- **모니터링**: Prometheus 메트릭 및 JSON 구조화 로깅
-- **유연성**: 다양한 FTP 서버 연결 지원 (다중 접속 설정)
+- **안정성**: FTP 세션 풀링, Circuit Breaker 패턴, 자동 재시도로 장애 복원력 확보
+- **모니터링**: Prometheus 메트릭, Consumer lag 모니터링, JSON 구조화 로깅
+- **유연성**: 다양한 FTP 서버 연결 지원, 커넥션 풀 예열 (Pre-warming)
+- **신뢰성**: Dead Letter Queue (DLQ), 전송 타임아웃, Exponential Backoff
 
 ### 사용 사례
 
@@ -28,34 +29,50 @@ FTP Pooler는 대량의 파일을 FTP 프로토콜을 통해 효율적으로 전
 
 ## 아키텍처
 
-```
-┌─────────────────┐     ┌──────────────────────────────────────────┐     ┌─────────────────┐
-│                 │     │              FTP Pooler Pod              │     │                 │
-│  Kafka Cluster  │     │  ┌────────────────────────────────────┐  │     │   FTP Servers   │
-│                 │     │  │         Task Consumer              │  │     │                 │
-│  ┌───────────┐  │     │  └────────────────────────────────────┘  │     │  ┌───────────┐  │
-│  │ ftp-tasks │──┼────▶│                  │                       │     │  │ Server A  │  │
-│  └───────────┘  │     │                  ▼                       │     │  └───────────┘  │
-│                 │     │  ┌────────────────────────────────────┐  │     │                 │
-│                 │     │  │       Transfer Engine              │  │◀───▶│  ┌───────────┐  │
-│                 │     │  │  ┌──────────────────────────────┐  │  │     │  │ Server B  │  │
-│  ┌───────────┐  │     │  │  │    FTP Session Pool Manager  │  │  │     │  └───────────┘  │
-│  │ftp-results│◀─┼─────│  │  │  ┌────────┐ ┌────────┐      │  │  │     │                 │
-│  └───────────┘  │     │  │  │  │Pool A  │ │Pool B  │ ...  │  │  │     │  ┌───────────┐  │
-│                 │     │  │  │  └────────┘ └────────┘      │  │  │     │  │ Server C  │  │
-│  ┌───────────┐  │     │  │  └──────────────────────────────┘  │  │     │  └───────────┘  │
-│  │ftp-failures│◀┼─────│  └────────────────────────────────────┘  │     │                 │
-│  └───────────┘  │     │                  │                       │     └─────────────────┘
-│                 │     │                  ▼                       │
-└─────────────────┘     │  ┌────────────────────────────────────┐  │     ┌─────────────────┐
-                        │  │        Result Producer             │  │     │  Local Storage  │
-                        │  └────────────────────────────────────┘  │     │  /data/storage  │
-                        │                                          │     └─────────────────┘
-                        │  ┌─────────────┐  ┌─────────────────┐   │
-                        │  │ REST API    │  │ Prometheus      │   │
-                        │  │ :8080       │  │ Metrics :9090   │   │
-                        │  └─────────────┘  └─────────────────┘   │
-                        └──────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Kafka_Cluster[Kafka Cluster]
+        ftp-tasks[ftp-tasks]
+        ftp-results[ftp-results]
+        ftp-failures[ftp-failures]
+    end
+
+    subgraph FTP_Pooler_Pod[FTP Pooler Pod]
+        TaskConsumer[Task Consumer]
+
+        subgraph TransferEngine[Transfer Engine]
+            subgraph SessionPoolManager[FTP Session Pool Manager]
+                PoolA[Pool A]
+                PoolB[Pool B]
+            end
+        end
+
+        ResultProducer[Result Producer]
+
+        subgraph Services[Services]
+            API[REST API :8080]
+            Metrics[Prometheus Metrics :9090]
+        end
+    end
+
+    subgraph FTP_Servers[FTP Servers]
+        ServerA[Server A]
+        ServerB[Server B]
+        ServerC[Server C]
+    end
+
+    LocalStorage[Local Storage\n/data/storage]
+
+    ftp-tasks --> TaskConsumer
+    TaskConsumer --> TransferEngine
+    TransferEngine --> ResultProducer
+    ResultProducer --> ftp-results
+    ResultProducer --> ftp-failures
+
+    SessionPoolManager <--> ServerA
+    SessionPoolManager <--> ServerB
+    SessionPoolManager <--> ServerC
+    TransferEngine <--> LocalStorage
 ```
 
 ### 데이터 흐름
