@@ -7,7 +7,7 @@ from ftp_pooler.config.connections import (
     ConnectionType,
     FTPConnectionConfig,
 )
-from ftp_pooler.config.settings import PoolSettings
+from ftp_pooler.config.settings import CircuitBreakerSettings, PoolSettings
 from ftp_pooler.pool.manager import SessionPool, SessionPoolManager
 from ftp_pooler.pool.session import FTPSession, SessionState
 
@@ -155,3 +155,82 @@ class TestSessionState:
         assert SessionState.BUSY.value == "busy"
         assert SessionState.DISCONNECTED.value == "disconnected"
         assert SessionState.ERROR.value == "error"
+
+
+class TestPoolSettings:
+    """Tests for PoolSettings with pre-warming."""
+
+    def test_default_prewarm_settings(self) -> None:
+        """Test default pre-warm settings."""
+        settings = PoolSettings()
+
+        assert settings.prewarm_enabled is True
+        assert settings.prewarm_sessions_per_connection == 2
+        assert settings.prewarm_timeout_seconds == 30
+
+    def test_custom_prewarm_settings(self) -> None:
+        """Test custom pre-warm settings."""
+        settings = PoolSettings(
+            prewarm_enabled=False,
+            prewarm_sessions_per_connection=5,
+            prewarm_timeout_seconds=60,
+        )
+
+        assert settings.prewarm_enabled is False
+        assert settings.prewarm_sessions_per_connection == 5
+        assert settings.prewarm_timeout_seconds == 60
+
+
+class TestSessionPoolManagerWithCircuitBreaker:
+    """Tests for SessionPoolManager with circuit breaker."""
+
+    def test_manager_with_circuit_breaker_settings(self) -> None:
+        """Test manager initialization with circuit breaker settings."""
+        registry = ConnectionRegistry()
+        registry.register(
+            FTPConnectionConfig(
+                connection_id="test",
+                type=ConnectionType.FTP,
+                host="ftp.example.com",
+            )
+        )
+
+        pool_settings = PoolSettings()
+        cb_settings = CircuitBreakerSettings(
+            failure_threshold=5,
+            success_threshold=3,
+            timeout_seconds=60,
+        )
+
+        manager = SessionPoolManager(
+            connection_registry=registry,
+            settings=pool_settings,
+            circuit_breaker_settings=cb_settings,
+        )
+
+        stats = manager.get_stats()
+
+        assert "circuit_breakers" in stats
+        assert stats["max_sessions_per_pod"] == 100
+
+    def test_manager_stats_include_circuit_breakers(self) -> None:
+        """Test manager stats include circuit breaker info."""
+        registry = ConnectionRegistry()
+        registry.register(
+            FTPConnectionConfig(
+                connection_id="test-ftp",
+                type=ConnectionType.FTP,
+                host="ftp.example.com",
+            )
+        )
+
+        settings = PoolSettings()
+        manager = SessionPoolManager(
+            connection_registry=registry,
+            settings=settings,
+        )
+
+        stats = manager.get_stats()
+
+        assert "circuit_breakers" in stats
+        assert isinstance(stats["circuit_breakers"], dict)

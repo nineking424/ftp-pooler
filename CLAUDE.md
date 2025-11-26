@@ -19,7 +19,7 @@
 | API | FastAPI |
 | 로깅 | structlog (JSON structured logging) |
 | 메트릭 | prometheus-client |
-| 테스트 | pytest + pytest-asyncio (33개 테스트) |
+| 테스트 | pytest + pytest-asyncio (50개+ 테스트) |
 | 컨테이너 | Docker (multi-arch: AMD64/ARM64) |
 | 오케스트레이션 | Kubernetes StatefulSet |
 
@@ -67,11 +67,13 @@ ftp-pooler/
 │   │   ├── settings.py   # Pydantic 기반 설정 모델
 │   │   └── connections.py # 연결 설정 (INI 파서)
 │   ├── kafka/            # Kafka consumer/producer
-│   │   ├── consumer.py   # 비동기 메시지 소비
-│   │   └── producer.py   # 결과/실패 메시지 발행
+│   │   ├── consumer.py   # 비동기 메시지 소비 (재시도, lag 모니터링)
+│   │   ├── producer.py   # 결과/실패 메시지 발행 (비동기, 배치)
+│   │   └── dlq.py        # Dead Letter Queue 처리
 │   ├── pool/             # FTP 세션 풀 관리
-│   │   ├── manager.py    # SessionPoolManager
-│   │   └── session.py    # FTPSession (연결 상태 관리)
+│   │   ├── manager.py    # SessionPoolManager (예열, Circuit Breaker)
+│   │   ├── session.py    # FTPSession (연결 상태 관리)
+│   │   └── circuit_breaker.py  # Circuit Breaker 패턴
 │   ├── transfer/         # 전송 엔진
 │   │   ├── engine.py     # TransferEngine
 │   │   └── task.py       # TransferTask 모델
@@ -90,11 +92,12 @@ ftp-pooler/
 │   └── test/             # 테스트 환경
 │       ├── configmap-test.yaml
 │       └── ftp-server.yaml  # vsftpd 테스트 서버
-├── tests/                # 테스트 코드 (33개)
+├── tests/                # 테스트 코드 (50개+)
 │   ├── test_config.py    # 설정 테스트
-│   ├── test_pool.py      # 세션 풀 테스트
-│   ├── test_transfer.py  # 전송 엔진 테스트
-│   ├── test_kafka.py     # Kafka 통합 테스트
+│   ├── test_pool.py      # 세션 풀 및 예열 테스트
+│   ├── test_transfer.py  # 전송 엔진 및 타임아웃 테스트
+│   ├── test_kafka.py     # Kafka/DLQ/재시도/lag 테스트
+│   ├── test_circuit_breaker.py  # Circuit Breaker 테스트
 │   └── test_api.py       # API 테스트
 ├── docs/                 # 문서
 │   ├── ARCHITECTURE.md   # 상세 아키텍처 문서
@@ -116,11 +119,28 @@ kafka:
   input_topic: "ftp-tasks"
   result_topic: "ftp-results"
   fail_topic: "ftp-failures"
+  dlq_topic: "ftp-tasks-dlq"     # Dead Letter Queue
+  max_retries: 5                  # Kafka 재시도 횟수
+  base_backoff_ms: 1000           # 기본 백오프 (ms)
+  max_backoff_ms: 30000           # 최대 백오프 (ms)
 
 pool:
   max_sessions_per_pod: 100
   max_sessions_per_connection: 10
   session_timeout_seconds: 300
+  prewarm_enabled: true           # 커넥션 풀 예열
+  prewarm_sessions_per_connection: 2
+  prewarm_timeout_seconds: 30
+
+transfer:
+  transfer_timeout_seconds: 300   # 전송 타임아웃
+  connect_timeout_seconds: 30     # 연결 타임아웃
+
+circuit_breaker:
+  failure_threshold: 5            # 실패 임계값
+  success_threshold: 3            # 복구 성공 임계값
+  timeout_seconds: 60             # 열림 상태 유지 시간
+  half_open_max_calls: 3          # Half-Open 테스트 호출 수
 
 api:
   host: "0.0.0.0"

@@ -14,9 +14,10 @@ FTP Pooler는 대량의 파일을 FTP 프로토콜을 통해 효율적으로 전
 
 - **고성능**: asyncio 기반 비동기 처리로 동시에 다수의 파일 전송
 - **확장성**: Kubernetes StatefulSet으로 손쉬운 수평 확장 (scale-out)
-- **안정성**: FTP 세션 풀링으로 연결 재사용 및 효율적인 리소스 관리
-- **모니터링**: Prometheus 메트릭 및 JSON 구조화 로깅
-- **유연성**: 다양한 FTP 서버 연결 지원 (다중 접속 설정)
+- **안정성**: FTP 세션 풀링, Circuit Breaker 패턴, 자동 재시도로 장애 복원력 확보
+- **모니터링**: Prometheus 메트릭, Consumer lag 모니터링, JSON 구조화 로깅
+- **유연성**: 다양한 FTP 서버 연결 지원, 커넥션 풀 예열 (Pre-warming)
+- **신뢰성**: Dead Letter Queue (DLQ), 전송 타임아웃, Exponential Backoff
 
 ### 사용 사례
 
